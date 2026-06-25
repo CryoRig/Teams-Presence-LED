@@ -79,13 +79,15 @@ Replace `COM3` with the actual port shown in Device Manager.
 
 ## Bridge Application
 
+The bridge is a WPF application that runs in the Windows system tray. It features a system tray icon for status monitoring and a settings window for configuring colors.
+
 ```bash
 cd bridge/TeamsPresenceBridge
 dotnet restore
 dotnet run
 ```
 
-The bridge reads `config.json` for the presence-to-command mapping and COM port settings. Set `"comPort": "AUTO"` to auto-detect, or specify a port like `"COM3"`.
+The bridge reads `config.json` for the presence-to-command mapping and COM port settings. By default, it uses `"comPort": "AUTO"` to auto-detect the ESP32.
 
 ## Verification Checklist
 

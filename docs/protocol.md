@@ -52,5 +52,5 @@ Used by the Bridge to verify that the ESP32 is still connected and responsive.
 ## Error Handling & Edge Cases
 
 1. **Malformed Commands:** If the ESP32 receives a command that does not match any of the above formats, it should ignore the command and remain in its current state.
-2. **Loss of Communication:** If the ESP32 does not receive a `PING` command for **30 seconds**, it must enter "Disconnected State" (a slow white pulse) to alert the user.
+2. **Loss of Communication:** If the ESP32 does not receive a `PING` command for **30 seconds**, it must enter "Disconnected State" (a moderate white pulse) to alert the user.
 3. **Invalid RGB Values:** Any value outside the 0-255 range should be treated as an error and ignored.

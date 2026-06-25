@@ -1,0 +1,15 @@
+{
+  "comPort": "AUTO",
+  "pollIntervalMs": 5000,
+  "pingIntervalMs": 15000,
+  "presenceMap": {
+    "Available":    { "command": "SOLID",        "r": 0,   "g": 200, "b": 0   },
+    "Busy":         { "command": "SOLID",        "r": 200, "g": 0,   "b": 0   },
+    "DoNotDisturb": { "command": "SOLID",        "r": 200, "g": 0,   "b": 0   },
+    "Away":         { "command": "BREATHE_SLOW", "r": 255, "g": 120, "b": 0   },
+    "BeRightBack":  { "command": "BREATHE_SLOW", "r": 255, "g": 80,  "b": 0   },
+    "Offline":      { "command": "OFF",          "r": 0,   "g": 0,   "b": 0   },
+    "Unknown":      { "command": "BREATHE",      "r": 80,  "g": 80,  "b": 80  }
+  },
+  "watchdog": { "command": "BREATHE_SLOW", "r": 255, "g": 255, "b": 255 }
+}

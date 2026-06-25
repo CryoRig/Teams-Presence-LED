@@ -17,7 +17,8 @@ Define a simple newline-terminated ASCII protocol so both sides can be developed
 | Command | Meaning |
 | --- | --- |
 | `SOLID:R,G,B\n` | Set all LEDs to a solid color |
-| `BREATHE:R,G,B\n` | Start a breathing/pulsing animation |
+| `BREATHE:R,G,B\n` | Start a moderate breathing/pulsing animation (~3s cycle) |
+| `BREATHE_SLOW:R,G,B\n` | Start a slow breathing/pulsing animation (~5s cycle) |
 | `OFF\n` | Turn all LEDs off |
 | `PING\n` | Bridge heartbeat; the ESP32 replies with `PONG\n` |
 
@@ -29,14 +30,14 @@ Before writing any firmware logic, the debug and serial interaction layer must b
 
 ### Board selection (locked here)
 
-Use the **ESP32-S3-DevKitC-1**. The ESP32-S3 has a built-in USB Serial/JTAG controller (GPIO19 D−, GPIO20 D+) that exposes both a CDC-ACM serial port and a JTAG debug interface over a single USB cable simultaneously. No external probe or FTDI/CH340 bridge chip is needed.
+Use the **Seeed XIAO ESP32-S3**. The ESP32-S3 has a built-in USB Serial/JTAG controller exposed through the XIAO's USB-C connector, providing both a CDC-ACM serial port and a JTAG debug interface over a single cable. No external probe or FTDI/CH340 bridge chip is needed.
 
 ### PlatformIO debug configuration
 
 Add to `firmware/platformio.ini`:
 
 - `debug_tool = esp-builtin` — uses the on-chip JTAG via OpenOCD
-- `upload_protocol = esp-builtin` — flash over the same USB port
+- `upload_protocol = esptool` — flash via the built-in USB using esptool
 - `monitor_speed = 115200`
 - `monitor_filters = send_on_enter` — buffers keyboard input and sends a full line on Enter, matching the `\n`-terminated protocol
 - `monitor_echo = yes` — shows typed commands in the terminal
@@ -85,10 +86,10 @@ Before moving to Phase 4, confirm all three of the following:
 | Available | `SOLID:0,200,0` | Green solid |
 | Busy | `SOLID:200,0,0` | Red solid |
 | DoNotDisturb | `SOLID:200,0,0` | Red solid (full brightness) |
-| Away | `BREATHE:255,120,0` | Amber breathing |
-| BeRightBack | `BREATHE:255,80,0` | Orange slow pulse |
+| Away | `BREATHE_SLOW:255,120,0` | Amber slow pulse (~5s) |
+| BeRightBack | `BREATHE_SLOW:255,80,0` | Orange slow pulse (~5s) |
 | Offline | `OFF` | Off |
-| Unknown | `BREATHE:80,80,80` | Grey slow pulse |
+| Unknown | `BREATHE:80,80,80` | Grey moderate pulse (~3s) |
 
 ## Phase 5 — Bridge App
 
@@ -135,7 +136,7 @@ Target: a .NET 8 console application, with the option to evolve into a Windows t
 
 ## Decisions and Scope Boundaries
 
-- Board locked to **ESP32-S3-DevKitC-1** for native USB JTAG; the entire debug strategy depends on this choice
+- Board locked to **Seeed XIAO ESP32-S3** for native USB JTAG; the entire debug strategy depends on this choice
 - No cloud and no Microsoft Graph; the solution is fully local and works offline
 - USB serial only; no WiFi is required on the ESP32, keeping the firmware simpler
 - No Teams app registration; the bridge relies on the local Teams API and should fail gracefully with a clear error if it becomes unavailable

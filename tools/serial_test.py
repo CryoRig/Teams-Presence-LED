@@ -1,4 +1,5 @@
 import serial
+import serial.tools.list_ports
 import threading
 import sys
 import argparse
@@ -9,13 +10,22 @@ def read_from_port(ser):
     """Continuously reads from the serial port and prints to stdout."""
     while True:
         try:
+            if not ser.is_open:
+                print("[Reader] Port closed, stopping reader thread.")
+                break
             if ser.in_waiting > 0:
                 line = ser.readline().decode('utf-8', errors='replace').strip()
                 if line:
                     timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     print(f"[{timestamp}] <ESP32>: {line}")
+            else:
+                time.sleep(0.01)  # Avoid busy-waiting when no data is available
+        except serial.SerialException as e:
+            print(f"[Reader] Serial port disconnected: {e}")
+            break
         except Exception as e:
-            print(f"Error reading serial: {e}")
+            print(f"[Reader] Error reading serial: {e}")
+            break
 
 def main():
     parser = argparse.ArgumentParser(description="Serial Interface Test Tool for ESP32")
@@ -45,10 +55,13 @@ def main():
                 ser.write(formatted_cmd.encode('utf-8'))
     except KeyboardInterrupt:
         print("\n--- Closing connection ---")
-        ser.close()
+    except serial.SerialException as e:
+        print(f"Serial error: {e}")
     except Exception as e:
         print(f"Error: {e}")
-        ser.close()
+    finally:
+        if ser.is_open:
+            ser.close()
 
 if __name__ == "__main__":
     main()

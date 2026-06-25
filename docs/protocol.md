@@ -25,18 +25,26 @@ Sets all LEDs in the chain to a single, static color.
   - `B`: Blue component (0-255)
 
 ### 2. Start Breathing Animation
-Starts a continuous "breathing" (pulsing) effect using the specified color. The brightness will oscillate between a low value and the target color.
+Starts a continuous "breathing" (pulsing) effect using the specified color with a moderate speed (~3 second cycle).
 - **Format:** `BREATHE:R,G,B\n`
 - **Arguments:**
   - `R`: Red component (0-255)
   - `G`: Green component (0-255)
   - `B`: Blue component (0-255)
 
-### 3. Turn Off
+### 3. Start Slow Breathing Animation
+Starts a continuous "breathing" (pulsing) effect using the specified color with a slow speed (~5 second cycle). Intended for away/idle states.
+- **Format:** `BREATHE_SLOW:R,G,B\n`
+- **Arguments:**
+  - `R`: Red component (0-255)
+  - `G`: Green component (0-255)
+  - `B`: Blue component (0-255)
+
+### 4. Turn Off
 Turns all LEDs off immediately.
 - **Format:** `OFF\n`
 
-### 4. Heartbeat / Ping
+### 5. Heartbeat / Ping
 Used by the Bridge to verify that the ESP32 is still connected and responsive.
 - **Format (Bridge to ESP32):** `PING\n`
 - **Response (ESP32 to Bridge):** `PONG\n`

@@ -87,6 +87,14 @@ void loop() {
 
         if (incoming.length() == 0) {
             // Ignore empty lines
+        } else if (incoming == "HELP" || incoming == "?") {
+            Serial.println("--- Commands ---");
+            Serial.println("PING               : Heartbeat to keep connection alive");
+            Serial.println("OFF                : Turn off all LEDs");
+            Serial.println("SOLID:R,G,B        : Set solid color (0-255)");
+            Serial.println("BREATHE:R,G,B      : Moderate pulsing color");
+            Serial.println("BREATHE_SLOW:R,G,B : Slow pulsing color");
+            Serial.println("HELP or ?          : Show this help message");
         } else if (incoming == "PING") {
             Serial.println("PONG");
             lastHeartbeat = now;

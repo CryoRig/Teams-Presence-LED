@@ -4,11 +4,16 @@ use serialport::{SerialPort, SerialPortType};
 
 pub struct SerialManager {
     port: Option<Box<dyn SerialPort>>,
+    active_port_name: Option<String>,
 }
 
 impl SerialManager {
     pub fn new() -> Self {
-        Self { port: None }
+        Self { port: None, active_port_name: None }
+    }
+
+    pub fn get_port_name(&self) -> Option<String> {
+        self.active_port_name.clone()
     }
 
     pub fn connect(&mut self, port_name: &str) -> bool {
@@ -26,10 +31,12 @@ impl SerialManager {
                 Ok(port) => {
                     println!("[SerialManager] Connected to {}", p);
                     self.port = Some(port);
+                    self.active_port_name = Some(p);
                     true
                 }
                 Err(e) => {
                     eprintln!("[SerialManager] Failed to open port {}: {}", p, e);
+                    self.active_port_name = None;
                     false
                 }
             }
@@ -61,7 +68,7 @@ impl SerialManager {
         
         // Find the first USB port if possible
         for p in &ports {
-            if let SerialPortType::UsbPort(info) = &p.port_type {
+            if let SerialPortType::UsbPort(_info) = &p.port_type {
                 // We could filter by VID/PID of standard ESP32 boards here
                 // For now, just return the first USB port
                 return Some(p.port_name.clone());

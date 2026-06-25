@@ -104,13 +104,12 @@ impl TeamsLogWatcher {
         println!("[TeamsLogWatcher] Initialized using log directory: {:?}", log_directory);
 
         let last_presence = Arc::new(Mutex::new(None));
-        let last_presence_clone = last_presence.clone();
         
         // Background watcher thread for notify
         let mut watcher = None;
         
         if log_directory.exists() {
-            let log_dir_clone = log_directory.clone();
+            let _log_dir_clone = log_directory.clone();
             if let Ok(mut w) = notify::recommended_watcher(move |res: notify::Result<Event>| {
                 match res {
                     Ok(event) => {

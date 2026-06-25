@@ -3,77 +3,106 @@
 mod config;
 mod serial;
 mod teams;
+mod ui;
 
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use tray_item::{IconSource, TrayItem};
-use config::load_config;
+use config::{load_config, Config};
 use serial::SerialManager;
 use teams::TeamsClient;
+use eframe::egui;
 
-fn main() {
+fn main() -> eframe::Result<()> {
     let config = match load_config("config.json") {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Failed to load config: {}", e);
-            return;
+            // In a real app we might want to generate a default config, but for now we exit.
+            return Ok(());
         }
     };
 
-    // Setup tray icon
-    let mut tray = TrayItem::new(
-        "Teams Presence Bridge",
-        IconSource::Resource("tray-icon"), // Requires a .rc file, or we can use IconSource::Resource("") which might fallback. Actually for testing we can just use IconSource::Resource("IDI_ICON1") if we add resources, but tray-item allows loading from memory or just text? tray-item Windows implementation expects a resource ID. Let's use a blank or default.
-    ).unwrap();
+    let shared_config = Arc::new(Mutex::new(config));
+    let background_config = shared_config.clone();
 
-    let quit_flag = Arc::new(Mutex::new(false));
-    
-    let quit_clone = quit_flag.clone();
-    tray.add_menu_item("Quit", move || {
-        *quit_clone.lock().unwrap() = true;
-    }).unwrap();
+    // Spawn background bridge thread
+    thread::spawn(move || {
+        run_bridge_loop(background_config);
+    });
 
-    // Main bridge loop state
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_visible(true) // Keep true so eframe's event loop processes repaints
+            .with_position([-10000.0, -10000.0]) // Start completely off-screen
+            .with_taskbar(false) // Hide from taskbar initially
+            .with_inner_size([450.0, 500.0])
+            .with_title("Teams Presence Bridge Settings"),
+        ..Default::default()
+    };
+
+    // Run the eframe app
+    eframe::run_native(
+        "Teams Presence Bridge Settings",
+        options,
+        Box::new(move |cc| {
+            Ok(Box::new(ui::TeamsBridgeApp::new(cc, shared_config)))
+        }),
+    )?;
+    Ok(())
+}
+
+pub fn create_dummy_icon() -> tray_icon::Icon {
+    let width = 32;
+    let height = 32;
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for _ in 0..(width * height) {
+        rgba.extend_from_slice(&[0, 120, 215, 255]); // Teams Blue
+    }
+    tray_icon::Icon::from_rgba(rgba, width, height).unwrap()
+}
+
+fn run_bridge_loop(config: Arc<Mutex<Config>>) {
     let mut serial_manager = SerialManager::new();
     let mut teams_client = TeamsClient::new();
     
     let mut previous_presence: Option<String> = None;
     let mut last_ping_time = Instant::now();
 
-    // Initial serial connection
-    serial_manager.connect(&config.com_port);
+    // Initial connection based on initial config
+    let initial_port = config.lock().unwrap().com_port.clone();
+    serial_manager.connect(&initial_port);
 
     loop {
-        if *quit_flag.lock().unwrap() {
-            break;
-        }
+        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog) = {
+            let c = config.lock().unwrap();
+            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone())
+        };
 
-        // Try reconnect if disconnected
-        if !serial_manager.is_connected() {
-            serial_manager.connect(&config.com_port);
+        // Try reconnect if disconnected or if port changed
+        if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
+            serial_manager.connect(&current_com_port);
         }
 
         let presence = teams_client.get_presence();
         if presence != previous_presence {
             if let Some(p) = &presence {
-                let cmd = if let Some(c) = config.presence_map.get(p) {
+                let cmd = if let Some(c) = presence_map.get(p) {
                     c.to_serial_command()
                 } else {
                     // Unknown presence map
-                    "BREATHE:80,80,80\n".to_string()
+                    watchdog.to_serial_command()
                 };
                 serial_manager.send_command(&cmd);
             }
-            previous_presence = presence;
+            previous_presence = presence.clone();
         }
 
-        if serial_manager.is_connected() && last_ping_time.elapsed().as_millis() as u64 >= config.ping_interval_ms {
+        if serial_manager.is_connected() && last_ping_time.elapsed().as_millis() as u64 >= ping_interval {
             serial_manager.send_ping();
             last_ping_time = Instant::now();
         }
 
-        thread::sleep(Duration::from_millis(config.poll_interval_ms));
+        thread::sleep(Duration::from_millis(poll_interval));
     }
 }
-

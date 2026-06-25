@@ -31,3 +31,9 @@ pub fn load_config(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
     let config: Config = serde_json::from_str(&contents)?;
     Ok(config)
 }
+
+pub fn save_config(path: &str, config: &Config) -> Result<(), Box<dyn std::error::Error>> {
+    let json = serde_json::to_string_pretty(config)?;
+    fs::write(path, json)?;
+    Ok(())
+}

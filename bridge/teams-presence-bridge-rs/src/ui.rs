@@ -8,6 +8,7 @@ pub struct TeamsBridgeApp {
     com_ports: Vec<String>,
     #[allow(dead_code)]
     tray_icon: tray_icon::TrayIcon,
+    is_first_frame: bool,
 }
 
 impl TeamsBridgeApp {
@@ -23,6 +24,7 @@ impl TeamsBridgeApp {
 
         let tray_icon = tray_icon::TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
+            .with_menu_on_left_click(false)
             .with_tooltip("Teams Presence Bridge")
             .with_icon(crate::create_dummy_icon())
             .build()
@@ -33,12 +35,8 @@ impl TeamsBridgeApp {
             let receiver = tray_icon::TrayIconEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 if let tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. } = event {
-                    // Move it back on screen
-                    if let Some(cmd) = egui::ViewportCommand::center_on_screen(&ctx) {
-                        ctx.send_viewport_cmd(cmd);
-                    } else {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([100.0, 100.0].into()));
-                    }
+                    // Show the window
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     ctx.request_repaint();
                 }
@@ -59,26 +57,34 @@ impl TeamsBridgeApp {
             local_config,
             com_ports,
             tray_icon,
+            is_first_frame: true,
         }
     }
 }
 
 impl eframe::App for TeamsBridgeApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        
+        if self.is_first_frame {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            self.is_first_frame = false;
+        }
+
         // Intercept window close to hide instead of quit
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            // "Hide" it by moving off-screen
-            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition([-10000.0, -10000.0].into()));
+            // Hide it
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Teams Presence Bridge Settings");
 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.label("COM Port:");
-                egui::ComboBox::from_id_source("com_port")
+                egui::ComboBox::from_id_salt("com_port")
                     .selected_text(&self.local_config.com_port)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.local_config.com_port, "AUTO".to_string(), "AUTO");
@@ -141,7 +147,7 @@ impl eframe::App for TeamsBridgeApp {
 }
 
 fn render_color_command(ui: &mut egui::Ui, cmd: &mut ColorCommand, id_salt: &str) {
-    egui::ComboBox::from_id_source(format!("cmd_{}", id_salt))
+    egui::ComboBox::from_id_salt(format!("cmd_{}", id_salt))
         .selected_text(&cmd.command)
         .show_ui(ui, |ui| {
             ui.selectable_value(&mut cmd.command, "SOLID".to_string(), "SOLID");

@@ -17,9 +17,10 @@ fn main() -> eframe::Result<()> {
     let config = match load_config("config.json") {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to load config: {}", e);
-            // In a real app we might want to generate a default config, but for now we exit.
-            return Ok(());
+            eprintln!("Failed to load config, generating default: {}", e);
+            let default_config = Config::default();
+            let _ = config::save_config("config.json", &default_config);
+            default_config
         }
     };
 
@@ -33,9 +34,8 @@ fn main() -> eframe::Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_visible(true) // Keep true so eframe's event loop processes repaints
-            .with_position([-10000.0, -10000.0]) // Start completely off-screen
-            .with_taskbar(false) // Hide from taskbar initially
+            .with_visible(false) // Start hidden
+            .with_taskbar(false) // Hide from taskbar when hidden
             .with_inner_size([450.0, 500.0])
             .with_title("Teams Presence Bridge Settings"),
         ..Default::default()

@@ -12,6 +12,26 @@ pub struct Config {
     pub watchdog: ColorCommand,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        let mut presence_map = HashMap::new();
+        presence_map.insert("Available".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 255, b: 0 });
+        presence_map.insert("Busy".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 0, b: 0 });
+        presence_map.insert("DoNotDisturb".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 0, b: 0 });
+        presence_map.insert("Away".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 165, b: 0 });
+        presence_map.insert("BeRightBack".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 165, b: 0 });
+        presence_map.insert("Offline".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 });
+
+        Self {
+            com_port: "AUTO".to_string(),
+            poll_interval_ms: 5000,
+            ping_interval_ms: 10000,
+            presence_map,
+            watchdog: ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 },
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ColorCommand {
     pub command: String,

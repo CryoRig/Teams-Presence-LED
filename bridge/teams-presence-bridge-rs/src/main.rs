@@ -13,6 +13,13 @@ use serial::SerialManager;
 use teams::TeamsClient;
 use eframe::egui;
 
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct AppStatus {
+    pub esp_connected: bool,
+    pub esp_port: Option<String>,
+    pub teams_parsing: bool,
+}
+
 fn main() -> eframe::Result<()> {
     let config = match load_config("config.json") {
         Ok(c) => c,
@@ -26,10 +33,16 @@ fn main() -> eframe::Result<()> {
 
     let shared_config = Arc::new(Mutex::new(config));
     let background_config = shared_config.clone();
+    
+    let app_status = Arc::new(Mutex::new(AppStatus::default()));
+    let background_status = app_status.clone();
+    
+    let shared_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
+    let background_ctx = shared_ctx.clone();
 
     // Spawn background bridge thread
     thread::spawn(move || {
-        run_bridge_loop(background_config);
+        run_bridge_loop(background_config, background_status, background_ctx);
     });
 
     let options = eframe::NativeOptions {
@@ -46,7 +59,8 @@ fn main() -> eframe::Result<()> {
         "Teams Presence Bridge Settings",
         options,
         Box::new(move |cc| {
-            Ok(Box::new(ui::TeamsBridgeApp::new(cc, shared_config)))
+            *shared_ctx.lock().unwrap() = Some(cc.egui_ctx.clone());
+            Ok(Box::new(ui::TeamsBridgeApp::new(cc, shared_config, app_status)))
         }),
     )?;
     Ok(())
@@ -62,7 +76,7 @@ pub fn create_dummy_icon() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(rgba, width, height).unwrap()
 }
 
-fn run_bridge_loop(config: Arc<Mutex<Config>>) {
+fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ctx: Arc<Mutex<Option<egui::Context>>>) {
     let mut serial_manager = SerialManager::new();
     let mut teams_client = TeamsClient::new();
     
@@ -82,6 +96,26 @@ fn run_bridge_loop(config: Arc<Mutex<Config>>) {
         // Try reconnect if disconnected or if port changed
         if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
             serial_manager.connect(&current_com_port);
+        }
+
+        let connected = serial_manager.is_connected();
+        let port = serial_manager.get_port_name();
+        let parsing = teams_client.has_valid_log();
+
+        let mut status_changed = false;
+        {
+            let mut s = status.lock().unwrap();
+            if s.esp_connected != connected || s.esp_port != port || s.teams_parsing != parsing {
+                s.esp_connected = connected;
+                s.esp_port = port;
+                s.teams_parsing = parsing;
+                status_changed = true;
+            }
+        }
+        if status_changed {
+            if let Some(ctx) = ctx.lock().unwrap().as_ref() {
+                ctx.request_repaint();
+            }
         }
 
         let presence = teams_client.get_presence();

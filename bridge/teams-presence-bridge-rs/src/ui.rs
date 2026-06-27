@@ -9,18 +9,29 @@ pub struct TeamsBridgeApp {
     #[allow(dead_code)]
     tray_icon: tray_icon::TrayIcon,
     is_first_frame: bool,
+    status: Arc<Mutex<crate::AppStatus>>,
+    last_status: crate::AppStatus,
+    esp_status_item: tray_icon::menu::MenuItem,
+    teams_status_item: tray_icon::menu::MenuItem,
 }
 
 impl TeamsBridgeApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>, status: Arc<Mutex<crate::AppStatus>>) -> Self {
         let local_config = config.lock().unwrap().clone();
         let com_ports = serialport::available_ports()
             .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
             .unwrap_or_default();
-            
+
         let tray_menu = tray_icon::menu::Menu::new();
+        let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", false, None);
+        let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "🔴 Teams: Log Not Found", false, None);
         let quit_i = tray_icon::menu::MenuItem::with_id("quit", "Quit", true, None);
-        let _ = tray_menu.append_items(&[&quit_i]);
+        let _ = tray_menu.append_items(&[
+            &esp_status_item,
+            &teams_status_item,
+            &tray_icon::menu::PredefinedMenuItem::separator(),
+            &quit_i,
+        ]);
 
         let tray_icon = tray_icon::TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
@@ -29,7 +40,7 @@ impl TeamsBridgeApp {
             .with_icon(crate::create_dummy_icon())
             .build()
             .unwrap();
-
+            
         let ctx = cc.egui_ctx.clone();
         std::thread::spawn(move || {
             let receiver = tray_icon::TrayIconEvent::receiver();
@@ -58,6 +69,10 @@ impl TeamsBridgeApp {
             com_ports,
             tray_icon,
             is_first_frame: true,
+            status,
+            last_status: crate::AppStatus::default(),
+            esp_status_item,
+            teams_status_item,
         }
     }
 }
@@ -65,6 +80,26 @@ impl TeamsBridgeApp {
 impl eframe::App for TeamsBridgeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        // --- Status Update Logic ---
+        let current_status = self.status.lock().unwrap().clone();
+        if current_status != self.last_status {
+            if current_status.esp_connected {
+                let port_name = current_status.esp_port.clone().unwrap_or_default();
+                self.esp_status_item.set_text(format!("🟢 ESP32: Connected ({})", port_name));
+            } else {
+                self.esp_status_item.set_text("🔴 ESP32: Disconnected");
+            }
+
+            if current_status.teams_parsing {
+                self.teams_status_item.set_text("🟢 Teams: Log Parsing Active");
+            } else {
+                self.teams_status_item.set_text("🔴 Teams: Log Not Found");
+            }
+
+            self.last_status = current_status;
+        }
+        // ---------------------------
         
         if self.is_first_frame {
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -82,56 +117,76 @@ impl eframe::App for TeamsBridgeApp {
             ui.heading("Teams Presence Bridge Settings");
 
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.label("COM Port:");
-                egui::ComboBox::from_id_salt("com_port")
-                    .selected_text(&self.local_config.com_port)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.local_config.com_port, "AUTO".to_string(), "AUTO");
-                        for port in &self.com_ports {
-                            ui.selectable_value(&mut self.local_config.com_port, port.clone(), port);
+            egui::Grid::new("settings_grid")
+                .num_columns(2)
+                .spacing([20.0, 10.0])
+                .min_col_width(120.0)
+                .show(ui, |ui| {
+                    ui.label("COM Port:");
+                    ui.horizontal(|ui| {
+                        egui::ComboBox::from_id_salt("com_port")
+                            .selected_text(&self.local_config.com_port)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.local_config.com_port, "AUTO".to_string(), "AUTO");
+                                for port in &self.com_ports {
+                                    ui.selectable_value(&mut self.local_config.com_port, port.clone(), port);
+                                }
+                            });
+                        if ui.button("Refresh").clicked() {
+                            self.com_ports = serialport::available_ports()
+                                .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
+                                .unwrap_or_default();
                         }
                     });
-                if ui.button("Refresh").clicked() {
-                    self.com_ports = serialport::available_ports()
-                        .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
-                        .unwrap_or_default();
-                }
-            });
+                    ui.end_row();
 
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.label("Poll Interval (ms):");
-                ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Ping Interval (ms):");
-                ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000));
-            });
+                    ui.label("Poll Interval (ms):");
+                    ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000));
+                    ui.end_row();
 
-            ui.add_space(10.0);
+                    ui.label("Ping Interval (ms):");
+                    ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000));
+                    ui.end_row();
+                });
+
+            ui.add_space(20.0);
             ui.heading("Presence Mapping");
+            ui.add_space(10.0);
             
             // Sort keys to maintain stable order
             let mut keys: Vec<String> = self.local_config.presence_map.keys().cloned().collect();
             keys.sort();
 
             egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
-                for key in keys {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{}:", key));
-                        if let Some(cmd) = self.local_config.presence_map.get_mut(&key) {
-                            render_color_command(ui, cmd, &key);
+                egui::Grid::new("presence_mapping_grid")
+                    .num_columns(2)
+                    .spacing([20.0, 10.0])
+                    .min_col_width(120.0)
+                    .show(ui, |ui| {
+                        for key in keys {
+                            ui.label(format!("{}:", key));
+                            if let Some(cmd) = self.local_config.presence_map.get_mut(&key) {
+                                ui.horizontal(|ui| {
+                                    render_color_command(ui, cmd, &key);
+                                });
+                            }
+                            ui.end_row();
                         }
                     });
-                }
             });
 
             ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.label("Watchdog:");
-                render_color_command(ui, &mut self.local_config.watchdog, "watchdog");
-            });
+            egui::Grid::new("watchdog_grid")
+                .num_columns(2)
+                .spacing([20.0, 10.0])
+                .min_col_width(120.0)
+                .show(ui, |ui| {
+                    ui.label("Watchdog:");
+                    ui.horizontal(|ui| {
+                        render_color_command(ui, &mut self.local_config.watchdog, "watchdog");
+                    });
+                    ui.end_row();
+                });
 
             ui.add_space(20.0);
             if ui.button("Save Configuration").clicked() {
@@ -150,9 +205,10 @@ fn render_color_command(ui: &mut egui::Ui, cmd: &mut ColorCommand, id_salt: &str
     egui::ComboBox::from_id_salt(format!("cmd_{}", id_salt))
         .selected_text(&cmd.command)
         .show_ui(ui, |ui| {
+            ui.selectable_value(&mut cmd.command, "OFF".to_string(), "OFF");
             ui.selectable_value(&mut cmd.command, "SOLID".to_string(), "SOLID");
             ui.selectable_value(&mut cmd.command, "BREATHE".to_string(), "BREATHE");
-            ui.selectable_value(&mut cmd.command, "BLINK".to_string(), "BLINK");
+            ui.selectable_value(&mut cmd.command, "BREATHE_SLOW".to_string(), "BREATHE_SLOW");
         });
 
     let mut color = [cmd.r, cmd.g, cmd.b];

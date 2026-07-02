@@ -2,13 +2,15 @@
 
 #include <Arduino.h>
 #include <FastLED.h>
+#include <math.h>
 
 // --- Configuration ---
-#define LED_PIN     2              // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
-#define NUM_LEDS    8              // Number of WS2812B LEDs in the chain
-#define BRIGHTNESS  255            // Max brightness — protocol RGB values control intensity
-#define WATCHDOG_TIMEOUT 30000     // 30 seconds without PING → disconnected state
-#define FPS         60             // Animation frame rate limit
+#define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
+#define NUM_LEDS         8        // Number of WS2812B LEDs in the chain
+#define BRIGHTNESS       255      // Max brightness — protocol RGB values control intensity
+#define WATCHDOG_TIMEOUT 30000    // 30 seconds without PING → disconnected state
+#define FRAME_MS         17       // ~16.67 ms → 60 FPS (rounded to nearest ms)
+#define SERIAL_BUF_SIZE  64       // Max serial command length (bytes)
 
 // Breathing speed constants (radians per frame at 60 FPS)
 // Full sine cycle = 2π radians. At 60 FPS:
@@ -31,12 +33,29 @@ State currentState = STATE_OFF;
 CRGB targetColor = CRGB::Black;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
-float breatheAngle = 0;
+float breatheAngle = 0.0f;
+
+// --- Serial input buffer (non-blocking, length-guarded) ---
+char serialBuf[SERIAL_BUF_SIZE];
+int  serialBufLen = 0;
 
 // --- Helper: set all LEDs to a color and show ---
 void showSolid(CRGB color) {
     fill_solid(leds, NUM_LEDS, color);
     FastLED.show();
+}
+
+// --- Helper: advance breathe animation by one frame ---
+// Wraps breatheAngle to [0, 2π) to prevent float precision loss over time.
+void applyBreathe(float speed, CRGB color) {
+    breatheAngle += speed;
+    if (breatheAngle >= TWO_PI) breatheAngle -= TWO_PI;
+    float scale = (sinf(breatheAngle) + 1.0f) / 2.0f;
+    showSolid(CRGB(
+        (uint8_t)(color.r * scale),
+        (uint8_t)(color.g * scale),
+        (uint8_t)(color.b * scale)
+    ));
 }
 
 // --- Boot animation: rainbow wave across LEDs ---
@@ -49,7 +68,7 @@ void bootAnimation() {
             leds[i] = CHSV(hue, 255, 255);
         }
         FastLED.show();
-        delay(1000 / FPS);
+        delay(FRAME_MS);
     }
     // Fade out
     for (int b = 255; b >= 0; b -= 8) {
@@ -77,14 +96,34 @@ void setup() {
     Serial.println("\n--- XIAO ESP32-S3 PRESENCE INDICATOR ---");
 }
 
+// --- Helper: read one complete line from Serial without blocking ---
+// Returns true and populates 'out' when a '\n'-terminated line is ready.
+// Silently discards lines that exceed SERIAL_BUF_SIZE to prevent heap growth.
+bool readSerialLine(String &out) {
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        if (c == '\r') continue;          // strip CR from CRLF hosts
+        if (c == '\n') {
+            serialBuf[serialBufLen] = '\0';
+            out = String(serialBuf);
+            out.trim();
+            serialBufLen = 0;
+            return true;
+        }
+        if (serialBufLen < SERIAL_BUF_SIZE - 1) {
+            serialBuf[serialBufLen++] = c;
+        }
+        // Overflow: discard character (buffer flushes on next '\n')
+    }
+    return false;
+}
+
 void loop() {
     unsigned long now = millis();
 
     // 1. Handle Serial Input
-    if (Serial.available() > 0) {
-        String incoming = Serial.readStringUntil('\n');
-        incoming.trim();
-
+    String incoming;
+    if (readSerialLine(incoming)) {
         if (incoming.length() == 0) {
             // Ignore empty lines
         } else if (incoming == "HELP" || incoming == "?") {
@@ -94,10 +133,19 @@ void loop() {
             Serial.println("SOLID:R,G,B        : Set solid color (0-255)");
             Serial.println("BREATHE:R,G,B      : Moderate pulsing color");
             Serial.println("BREATHE_SLOW:R,G,B : Slow pulsing color");
+            Serial.println("RESET              : Reboot the microcontroller");
             Serial.println("HELP or ?          : Show this help message");
         } else if (incoming == "PING") {
             Serial.println("PONG");
-            lastHeartbeat = now;
+            // If we were disconnected, return to idle (OFF) state
+            if (currentState == STATE_DISCONNECTED) {
+                currentState = STATE_OFF;
+                showSolid(CRGB::Black);
+            }
+        } else if (incoming == "RESET") {
+            Serial.println("REBOOTING");
+            Serial.flush();
+            ESP.restart();
         } else if (incoming == "OFF") {
             currentState = STATE_OFF;
             showSolid(CRGB::Black);
@@ -129,42 +177,26 @@ void loop() {
                 }
             }
         }
-        // Unknown commands are silently ignored per protocol spec
+        // Any valid (non-empty) command proves the host is alive — reset watchdog
+        lastHeartbeat = now;
     }
 
-    // 2. Watchdog Check — only PING resets the timer
+    // 2. Watchdog Check — any command resets the timer
     if (currentState != STATE_DISCONNECTED && now - lastHeartbeat > WATCHDOG_TIMEOUT) {
         currentState = STATE_DISCONNECTED;
         breatheAngle = 0;
     }
 
     // 3. Animation Logic (frame-rate limited)
-    if (now - lastFrameTime >= (1000 / FPS)) {
+    if (now - lastFrameTime >= FRAME_MS) {
         lastFrameTime = now;
 
         if (currentState == STATE_BREATHE) {
-            breatheAngle += BREATHE_SPEED_MODERATE;
-            float scale = (sin(breatheAngle) + 1.0f) / 2.0f;
-            CRGB color = CRGB(
-                (uint8_t)(targetColor.r * scale),
-                (uint8_t)(targetColor.g * scale),
-                (uint8_t)(targetColor.b * scale)
-            );
-            showSolid(color);
+            applyBreathe(BREATHE_SPEED_MODERATE, targetColor);
         } else if (currentState == STATE_BREATHE_SLOW) {
-            breatheAngle += BREATHE_SPEED_SLOW;
-            float scale = (sin(breatheAngle) + 1.0f) / 2.0f;
-            CRGB color = CRGB(
-                (uint8_t)(targetColor.r * scale),
-                (uint8_t)(targetColor.g * scale),
-                (uint8_t)(targetColor.b * scale)
-            );
-            showSolid(color);
+            applyBreathe(BREATHE_SPEED_SLOW, targetColor);
         } else if (currentState == STATE_DISCONNECTED) {
-            breatheAngle += BREATHE_SPEED_MODERATE;
-            float scale = (sin(breatheAngle) + 1.0f) / 2.0f;
-            uint8_t v = (uint8_t)(255 * scale);
-            showSolid(CRGB(v, v, v));
+            applyBreathe(BREATHE_SPEED_MODERATE, CRGB(255, 255, 255));
         }
     }
 }

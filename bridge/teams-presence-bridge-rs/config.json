@@ -2,6 +2,7 @@
   "comPort": "AUTO",
   "pollIntervalMs": 5000,
   "pingIntervalMs": 15000,
+  "brightness": 191,
   "presenceMap": {
     "DoNotDisturb": {
       "command": "SOLID",

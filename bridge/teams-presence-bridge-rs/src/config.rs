@@ -8,8 +8,14 @@ pub struct Config {
     pub com_port: String,
     pub poll_interval_ms: u64,
     pub ping_interval_ms: u64,
+    #[serde(default = "default_brightness")]
+    pub brightness: u8,
     pub presence_map: HashMap<String, ColorCommand>,
     pub watchdog: ColorCommand,
+}
+
+fn default_brightness() -> u8 {
+    191 // ~75% of 255
 }
 
 impl Default for Config {
@@ -26,6 +32,7 @@ impl Default for Config {
             com_port: "AUTO".to_string(),
             poll_interval_ms: 5000,
             ping_interval_ms: 10000,
+            brightness: 191, // ~75%
             presence_map,
             watchdog: ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 },
         }
@@ -43,6 +50,12 @@ pub struct ColorCommand {
 impl ColorCommand {
     pub fn to_serial_command(&self) -> String {
         format!("{}:{},{},{}\n", self.command, self.r, self.g, self.b)
+    }
+}
+
+impl Config {
+    pub fn brightness_command(&self) -> String {
+        format!("BRIGHTNESS:{}\n", self.brightness)
     }
 }
 

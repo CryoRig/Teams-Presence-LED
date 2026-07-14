@@ -144,6 +144,7 @@ void loop() {
             Serial.println("SOLID:R,G,B        : Set solid color (0-255)");
             Serial.println("BREATHE:R,G,B      : Moderate pulsing color");
             Serial.println("BREATHE_SLOW:R,G,B : Slow pulsing color");
+            Serial.println("BRIGHTNESS:N       : Set global brightness (0-255)");
             Serial.println("RESET              : Reboot the microcontroller");
             Serial.println("HELP or ?          : Show this help message");
         } else if (incoming == "PING") {
@@ -157,6 +158,15 @@ void loop() {
             Serial.println("REBOOTING");
             Serial.flush();
             ESP.restart();
+        } else if (incoming.startsWith("BRIGHTNESS:")) {
+            int val;
+            if (sscanf(incoming.c_str(), "BRIGHTNESS:%d", &val) == 1) {
+                if (val >= 0 && val <= 255) {
+                    FastLED.setBrightness(val);
+                    lastHardwareColor = CRGB::Black; // Invalidate cache to force refresh
+                    FastLED.show();
+                }
+            }
         } else if (incoming == "OFF") {
             currentState = STATE_OFF;
             showSolid(CRGB::Black);

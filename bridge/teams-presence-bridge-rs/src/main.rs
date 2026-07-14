@@ -82,20 +82,36 @@ fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ct
     
     let mut previous_presence: Option<String> = None;
     let mut last_ping_time = Instant::now();
+    let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
 
     // Initial connection based on initial config
     let initial_port = config.lock().unwrap().com_port.clone();
     serial_manager.connect(&initial_port);
 
     loop {
-        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog) = {
+        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog, brightness) = {
             let c = config.lock().unwrap();
-            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone())
+            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness)
         };
 
         // Try reconnect if disconnected or if port changed
+        let was_disconnected = !serial_manager.is_connected();
         if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
             serial_manager.connect(&current_com_port);
+            // On fresh connection, send brightness and force re-send of current presence
+            if serial_manager.is_connected() && was_disconnected {
+                serial_manager.send_brightness(brightness);
+                last_sent_brightness = Some(brightness);
+                previous_presence = None; // Force re-send of presence color
+            }
+        }
+
+        // Live brightness update: detect slider changes from UI
+        if serial_manager.is_connected() {
+            if last_sent_brightness != Some(brightness) {
+                serial_manager.send_brightness(brightness);
+                last_sent_brightness = Some(brightness);
+            }
         }
 
         let connected = serial_manager.is_connected();

@@ -63,6 +63,11 @@ impl SerialManager {
         self.send_command("PING\n");
     }
 
+    pub fn send_brightness(&mut self, value: u8) {
+        let cmd = format!("BRIGHTNESS:{}\n", value);
+        self.send_command(&cmd);
+    }
+
     fn auto_detect_port() -> Option<String> {
         let ports = serialport::available_ports().unwrap_or_default();
         

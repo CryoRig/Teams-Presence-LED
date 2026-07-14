@@ -150,6 +150,23 @@ impl eframe::App for TeamsBridgeApp {
                 });
 
             ui.add_space(20.0);
+            ui.heading("Brightness");
+            ui.add_space(5.0);
+
+            let brightness_pct = (self.local_config.brightness as f32 / 255.0 * 100.0).round() as u32;
+            let mut brightness_slider_val = brightness_pct as i32;
+            let slider = egui::Slider::new(&mut brightness_slider_val, 0..=100)
+                .suffix("%")
+                .text("Global LED Brightness");
+            if ui.add(slider).changed() {
+                let new_brightness = (brightness_slider_val as f32 * 255.0 / 100.0).round() as u8;
+                self.local_config.brightness = new_brightness;
+                // Live preview: immediately push brightness to shared config
+                // so the bridge loop picks it up and sends to ESP
+                self.config.lock().unwrap().brightness = new_brightness;
+            }
+
+            ui.add_space(20.0);
             ui.heading("Presence Mapping");
             ui.add_space(10.0);
             

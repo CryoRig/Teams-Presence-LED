@@ -25,8 +25,8 @@ impl TeamsBridgeApp {
             .unwrap_or_default();
 
         let tray_menu = tray_icon::menu::Menu::new();
-        let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", false, None);
-        let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "🔴 Teams: Log Not Found", false, None);
+        let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", true, None);
+        let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "🔴 Teams: Log Not Found", true, None);
         let quit_i = tray_icon::menu::MenuItem::with_id("quit", "Quit", true, None);
         let _ = tray_menu.append_items(&[
             &esp_status_item,

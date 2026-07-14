@@ -119,7 +119,7 @@ void setup() {
     bootAnimation();
 
     lastHeartbeat = millis();
-    Serial.println("\n--- XIAO ESP32-S3 PRESENCE INDICATOR v0.1.0 ---");
+    Serial.println("\n--- XIAO ESP32-S3 PRESENCE INDICATOR v0.2.0 ---");
 }
 
 // --- Helper: read one complete line from Serial without blocking ---
@@ -150,7 +150,7 @@ void loop() {
         if (serialBuf[0] == '\0') {
             // Ignore empty lines
         } else if (strcmp(serialBuf, "HELP") == 0 || strcmp(serialBuf, "?") == 0) {
-            Serial.println("--- Teams Presence LED v0.1.0 ---");
+            Serial.println("--- Teams Presence LED v0.2.0 ---");
             Serial.println("--- Commands ---");
             Serial.println("PING               : Heartbeat to keep connection alive");
             Serial.println("OFF                : Turn off all LEDs");

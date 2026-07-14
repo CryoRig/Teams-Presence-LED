@@ -13,10 +13,12 @@ pub struct TeamsBridgeApp {
     last_status: crate::AppStatus,
     esp_status_item: tray_icon::menu::MenuItem,
     teams_status_item: tray_icon::menu::MenuItem,
+    config_path: String,
+    shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl TeamsBridgeApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>, status: Arc<Mutex<crate::AppStatus>>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>, status: Arc<Mutex<crate::AppStatus>>, config_path: String, shutdown_flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
         let local_config = config.lock().unwrap().clone();
         let com_ports = serialport::available_ports()
             .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
@@ -54,11 +56,14 @@ impl TeamsBridgeApp {
             }
         });
 
+        let ctx_quit = cc.egui_ctx.clone();
+        let shutdown_quit = shutdown_flag.clone();
         std::thread::spawn(move || {
             let receiver = tray_icon::menu::MenuEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 if event.id.0 == "quit" {
-                    std::process::exit(0);
+                    shutdown_quit.store(true, std::sync::atomic::Ordering::Relaxed);
+                    ctx_quit.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }
         });
@@ -73,6 +78,8 @@ impl TeamsBridgeApp {
             last_status: crate::AppStatus::default(),
             esp_status_item,
             teams_status_item,
+            config_path,
+            shutdown_flag,
         }
     }
 }
@@ -106,8 +113,8 @@ impl eframe::App for TeamsBridgeApp {
             self.is_first_frame = false;
         }
 
-        // Intercept window close to hide instead of quit
-        if ctx.input(|i| i.viewport().close_requested()) {
+        // Intercept window close to hide instead of quit, unless we are genuinely shutting down
+        if ctx.input(|i| i.viewport().close_requested()) && !self.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             // Hide it
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -207,7 +214,7 @@ impl eframe::App for TeamsBridgeApp {
 
             ui.add_space(20.0);
             if ui.button("Save Configuration").clicked() {
-                if let Err(e) = crate::config::save_config("config.json", &self.local_config) {
+                if let Err(e) = crate::config::save_config(&self.config_path, &self.local_config) {
                     eprintln!("Failed to save config: {}", e);
                 } else {
                     // Update shared config

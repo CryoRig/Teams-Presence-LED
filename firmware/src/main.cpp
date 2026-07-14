@@ -57,6 +57,7 @@ void applyBreathe(float speed, CRGB color) {
     breatheAngle += speed;
     if (breatheAngle >= TWO_PI) breatheAngle -= TWO_PI;
     float scale = (sinf(breatheAngle) + 1.0f) / 2.0f;
+    scale = scale * scale; // Approximate gamma 2.0 — simple and effective
     showSolid(CRGB(
         (uint8_t)(color.r * scale),
         (uint8_t)(color.g * scale),
@@ -107,16 +108,14 @@ void setup() {
 }
 
 // --- Helper: read one complete line from Serial without blocking ---
-// Returns true and populates 'out' when a '\n'-terminated line is ready.
+// Returns true when a '\n'-terminated line is ready.
 // Silently discards lines that exceed SERIAL_BUF_SIZE to prevent heap growth.
-bool readSerialLine(String &out) {
+bool readSerialLine() {
     while (Serial.available() > 0) {
         char c = (char)Serial.read();
         if (c == '\r') continue;          // strip CR from CRLF hosts
         if (c == '\n') {
             serialBuf[serialBufLen] = '\0';
-            out = String(serialBuf);
-            out.trim();
             serialBufLen = 0;
             return true;
         }
@@ -132,11 +131,10 @@ void loop() {
     unsigned long now = millis();
 
     // 1. Handle Serial Input
-    String incoming;
-    if (readSerialLine(incoming)) {
-        if (incoming.length() == 0) {
+    if (readSerialLine()) {
+        if (serialBuf[0] == '\0') {
             // Ignore empty lines
-        } else if (incoming == "HELP" || incoming == "?") {
+        } else if (strcmp(serialBuf, "HELP") == 0 || strcmp(serialBuf, "?") == 0) {
             Serial.println("--- Teams Presence LED v0.1.0 ---");
             Serial.println("--- Commands ---");
             Serial.println("PING               : Heartbeat to keep connection alive");
@@ -147,59 +145,72 @@ void loop() {
             Serial.println("BRIGHTNESS:N       : Set global brightness (0-255)");
             Serial.println("RESET              : Reboot the microcontroller");
             Serial.println("HELP or ?          : Show this help message");
-        } else if (incoming == "PING") {
+            lastHeartbeat = now;
+        } else if (strcmp(serialBuf, "PING") == 0) {
             Serial.println("PONG");
             // If we were disconnected, return to idle (OFF) state
             if (currentState == STATE_DISCONNECTED) {
                 currentState = STATE_OFF;
                 showSolid(CRGB::Black);
             }
-        } else if (incoming == "RESET") {
+            lastHeartbeat = now;
+        } else if (strcmp(serialBuf, "RESET") == 0) {
             Serial.println("REBOOTING");
             Serial.flush();
             ESP.restart();
-        } else if (incoming.startsWith("BRIGHTNESS:")) {
+        } else if (strncmp(serialBuf, "BRIGHTNESS:", 11) == 0) {
             int val;
-            if (sscanf(incoming.c_str(), "BRIGHTNESS:%d", &val) == 1) {
+            if (sscanf(serialBuf, "BRIGHTNESS:%d", &val) == 1) {
                 if (val >= 0 && val <= 255) {
                     FastLED.setBrightness(val);
                     lastHardwareColor = CRGB::Black; // Invalidate cache to force refresh
                     FastLED.show();
+                    Serial.println("OK");
+                    lastHeartbeat = now;
                 }
             }
-        } else if (incoming == "OFF") {
+        } else if (strcmp(serialBuf, "OFF") == 0) {
             currentState = STATE_OFF;
             showSolid(CRGB::Black);
-        } else if (incoming.startsWith("SOLID:")) {
+            Serial.println("OK");
+            lastHeartbeat = now;
+        } else if (strncmp(serialBuf, "SOLID:", 6) == 0) {
             int r, g, b;
-            if (sscanf(incoming.c_str(), "SOLID:%d,%d,%d", &r, &g, &b) == 3) {
+            if (sscanf(serialBuf, "SOLID:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_SOLID;
                     showSolid(targetColor);
+                    Serial.println("OK");
+                    lastHeartbeat = now;
                 }
             }
-        } else if (incoming.startsWith("BREATHE_SLOW:")) {
+        } else if (strncmp(serialBuf, "BREATHE_SLOW:", 13) == 0) {
             int r, g, b;
-            if (sscanf(incoming.c_str(), "BREATHE_SLOW:%d,%d,%d", &r, &g, &b) == 3) {
+            if (sscanf(serialBuf, "BREATHE_SLOW:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_BREATHE_SLOW;
                     breatheAngle = 0;
+                    Serial.println("OK");
+                    lastHeartbeat = now;
                 }
             }
-        } else if (incoming.startsWith("BREATHE:")) {
+        } else if (strncmp(serialBuf, "BREATHE:", 8) == 0) {
             int r, g, b;
-            if (sscanf(incoming.c_str(), "BREATHE:%d,%d,%d", &r, &g, &b) == 3) {
+            if (sscanf(serialBuf, "BREATHE:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_BREATHE;
                     breatheAngle = 0;
+                    Serial.println("OK");
+                    lastHeartbeat = now;
                 }
             }
+        } else {
+            Serial.print("ERR:UNKNOWN_CMD:");
+            Serial.println(serialBuf);
         }
-        // Any valid (non-empty) command proves the host is alive — reset watchdog
-        lastHeartbeat = now;
     }
 
     // 2. Watchdog Check — any command resets the timer

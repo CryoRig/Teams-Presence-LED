@@ -6,8 +6,10 @@ mod teams;
 mod ui;
 
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::path::PathBuf;
 use config::{load_config, Config};
 use serial::SerialManager;
 use teams::TeamsClient;
@@ -21,12 +23,19 @@ pub struct AppStatus {
 }
 
 fn main() -> eframe::Result<()> {
-    let config = match load_config("config.json") {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let config_path = exe_dir.join("config.json");
+    let config_path_str = config_path.to_string_lossy().to_string();
+
+    let config = match load_config(&config_path_str) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to load config, generating default: {}", e);
+            eprintln!("Failed to load config from {}, generating default: {}", config_path_str, e);
             let default_config = Config::default();
-            let _ = config::save_config("config.json", &default_config);
+            let _ = config::save_config(&config_path_str, &default_config);
             default_config
         }
     };
@@ -40,9 +49,12 @@ fn main() -> eframe::Result<()> {
     let shared_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let background_ctx = shared_ctx.clone();
 
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let background_shutdown = shutdown_flag.clone();
+
     // Spawn background bridge thread
     thread::spawn(move || {
-        run_bridge_loop(background_config, background_status, background_ctx);
+        run_bridge_loop(background_config, background_status, background_ctx, background_shutdown);
     });
 
     let options = eframe::NativeOptions {
@@ -60,7 +72,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |cc| {
             *shared_ctx.lock().unwrap() = Some(cc.egui_ctx.clone());
-            Ok(Box::new(ui::TeamsBridgeApp::new(cc, shared_config, app_status)))
+            Ok(Box::new(ui::TeamsBridgeApp::new(cc, shared_config, app_status, config_path_str, shutdown_flag)))
         }),
     )?;
     Ok(())
@@ -76,12 +88,18 @@ pub fn create_dummy_icon() -> tray_icon::Icon {
     tray_icon::Icon::from_rgba(rgba, width, height).unwrap()
 }
 
-fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ctx: Arc<Mutex<Option<egui::Context>>>) {
+fn run_bridge_loop(
+    config: Arc<Mutex<Config>>,
+    status: Arc<Mutex<AppStatus>>,
+    ctx: Arc<Mutex<Option<egui::Context>>>,
+    shutdown_flag: Arc<AtomicBool>,
+) {
     let mut serial_manager = SerialManager::new();
     let mut teams_client = TeamsClient::new();
     
     let mut previous_presence: Option<String> = None;
     let mut last_ping_time = Instant::now();
+    let mut last_poll_time = Instant::now();
     let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
 
     // Initial connection based on initial config
@@ -89,24 +107,52 @@ fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ct
     serial_manager.connect(&initial_port);
 
     loop {
+        // Fast tick for shutdown and UI responsiveness
+        if shutdown_flag.load(Ordering::Relaxed) {
+            serial_manager.send_command("OFF\n");
+            break;
+        }
+
         let (current_com_port, poll_interval, ping_interval, presence_map, watchdog, brightness) = {
             let c = config.lock().unwrap();
             (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness)
         };
 
-        // Try reconnect if disconnected or if port changed
-        let was_disconnected = !serial_manager.is_connected();
-        if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
-            serial_manager.connect(&current_com_port);
-            // On fresh connection, send brightness and force re-send of current presence
-            if serial_manager.is_connected() && was_disconnected {
-                serial_manager.send_brightness(brightness);
-                last_sent_brightness = Some(brightness);
-                previous_presence = None; // Force re-send of presence color
+        let now = Instant::now();
+
+        // 1. Slow tick: Teams polling and Serial reconnection
+        if now.duration_since(last_poll_time).as_millis() as u64 >= poll_interval {
+            last_poll_time = now;
+
+            // Try reconnect if disconnected or if port changed
+            let was_disconnected = !serial_manager.is_connected();
+            if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
+                serial_manager.connect(&current_com_port);
+                // On fresh connection, send brightness and force re-send of current presence
+                if serial_manager.is_connected() && was_disconnected {
+                    serial_manager.send_brightness(brightness);
+                    last_sent_brightness = Some(brightness);
+                    previous_presence = None; // Force re-send of presence color
+                }
+            }
+
+            let presence = teams_client.get_presence();
+            if presence != previous_presence {
+                if let Some(p) = &presence {
+                    let cmd = if let Some(c) = presence_map.get(p) {
+                        c.to_serial_command()
+                    } else {
+                        eprintln!("[Bridge] Unknown presence '{}' not in presence_map, sending watchdog command", p);
+                        watchdog.to_serial_command()
+                    };
+                    serial_manager.send_command(&cmd);
+                    last_ping_time = Instant::now(); // Presence command proves host is alive
+                }
+                previous_presence = presence.clone();
             }
         }
 
-        // Live brightness update: detect slider changes from UI
+        // 2. Fast tick updates: Live brightness update from UI
         if serial_manager.is_connected() {
             if last_sent_brightness != Some(brightness) {
                 serial_manager.send_brightness(brightness);
@@ -114,6 +160,13 @@ fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ct
             }
         }
 
+        // 3. Ping tick
+        if serial_manager.is_connected() && now.duration_since(last_ping_time).as_millis() as u64 >= ping_interval {
+            serial_manager.send_ping();
+            last_ping_time = Instant::now();
+        }
+
+        // 4. Update UI Status
         let connected = serial_manager.is_connected();
         let port = serial_manager.get_port_name();
         let parsing = teams_client.has_valid_log();
@@ -134,25 +187,6 @@ fn run_bridge_loop(config: Arc<Mutex<Config>>, status: Arc<Mutex<AppStatus>>, ct
             }
         }
 
-        let presence = teams_client.get_presence();
-        if presence != previous_presence {
-            if let Some(p) = &presence {
-                let cmd = if let Some(c) = presence_map.get(p) {
-                    c.to_serial_command()
-                } else {
-                    // Unknown presence map
-                    watchdog.to_serial_command()
-                };
-                serial_manager.send_command(&cmd);
-            }
-            previous_presence = presence.clone();
-        }
-
-        if serial_manager.is_connected() && last_ping_time.elapsed().as_millis() as u64 >= ping_interval {
-            serial_manager.send_ping();
-            last_ping_time = Instant::now();
-        }
-
-        thread::sleep(Duration::from_millis(poll_interval));
+        thread::sleep(Duration::from_millis(100));
     }
 }

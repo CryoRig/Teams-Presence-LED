@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 use std::time::Duration;
 use serialport::{SerialPort, SerialPortType};
 
@@ -61,6 +61,13 @@ impl SerialManager {
 
     pub fn send_ping(&mut self) {
         self.send_command("PING\n");
+        if let Some(ref mut port) = self.port {
+            let mut buf = [0u8; 64];
+            if let Err(e) = port.read(&mut buf) {
+                eprintln!("[SerialManager] Error reading PONG, disconnecting: {}", e);
+                self.port = None;
+            }
+        }
     }
 
     pub fn send_brightness(&mut self, value: u8) {

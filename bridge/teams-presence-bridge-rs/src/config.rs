@@ -49,7 +49,11 @@ pub struct ColorCommand {
 
 impl ColorCommand {
     pub fn to_serial_command(&self) -> String {
-        format!("{}:{},{},{}\n", self.command, self.r, self.g, self.b)
+        if self.command == "OFF" {
+            "OFF\n".to_string()
+        } else {
+            format!("{}:{},{},{}\n", self.command, self.r, self.g, self.b)
+        }
     }
 }
 

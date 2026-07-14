@@ -1,20 +1,24 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::time::{Instant, Duration};
 use regex::Regex;
 
 pub struct TeamsClient {
     log_directory: PathBuf,
     current_file: Option<PathBuf>,
     last_position: u64,
-    last_presence: Arc<Mutex<Option<String>>>,
+    last_presence: Option<String>,
     presence_regex: Regex,
+    last_dir_scan: Option<Instant>,
 }
 
 impl TeamsClient {
     pub fn new() -> Self {
-        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| String::new());
+        let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_else(|e| {
+            eprintln!("[TeamsClient] LOCALAPPDATA not set: {}. Teams log parsing will be disabled.", e);
+            String::new()
+        });
         let log_directory = Path::new(&local_app_data)
             .join("Packages")
             .join("MSTeams_8wekyb3d8bbwe")
@@ -25,15 +29,15 @@ impl TeamsClient {
             
         println!("[TeamsClient] Initialized using log directory: {:?}", log_directory);
 
-        let last_presence = Arc::new(Mutex::new(None));
         let presence_regex = Regex::new(r"UserPresenceAction: \{cloud_context: https://teams\.microsoft\.com, availability: (\w+)\}").unwrap();
 
         Self {
             log_directory,
             current_file: None,
             last_position: 0,
-            last_presence,
+            last_presence: None,
             presence_regex,
+            last_dir_scan: None,
         }
     }
 
@@ -46,20 +50,24 @@ impl TeamsClient {
             return None;
         }
 
-        let mut newest_file = None;
-        let mut max_time = std::time::SystemTime::UNIX_EPOCH;
-
-        if let Ok(entries) = fs::read_dir(&self.log_directory) {
-            for entry in entries.filter_map(Result::ok) {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        if name.starts_with("MSTeams_") && name.ends_with(".log") {
-                            if let Ok(metadata) = entry.metadata() {
-                                if let Ok(time) = metadata.modified() {
-                                    if time > max_time {
-                                        max_time = time;
-                                        newest_file = Some(path);
+        let mut newest_file = self.current_file.clone();
+        
+        let needs_scan = self.last_dir_scan.map_or(true, |last| last.elapsed() > Duration::from_secs(60));
+        
+        if needs_scan {
+            let mut max_time = std::time::SystemTime::UNIX_EPOCH;
+            if let Ok(entries) = fs::read_dir(&self.log_directory) {
+                for entry in entries.filter_map(Result::ok) {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.starts_with("MSTeams_") && name.ends_with(".log") {
+                                if let Ok(metadata) = entry.metadata() {
+                                    if let Ok(time) = metadata.modified() {
+                                        if time > max_time {
+                                            max_time = time;
+                                            newest_file = Some(path);
+                                        }
                                     }
                                 }
                             }
@@ -67,6 +75,7 @@ impl TeamsClient {
                     }
                 }
             }
+            self.last_dir_scan = Some(Instant::now());
         }
 
         if let Some(file_path) = newest_file {
@@ -104,9 +113,8 @@ impl TeamsClient {
                         }
 
                         if let Some(status) = current_status {
-                            let mut lock = self.last_presence.lock().unwrap();
-                            if Some(&status) != lock.as_ref() {
-                                *lock = Some(status);
+                            if Some(&status) != self.last_presence.as_ref() {
+                                self.last_presence = Some(status);
                             }
                         }
                     }
@@ -114,7 +122,6 @@ impl TeamsClient {
             }
         }
 
-        let lock = self.last_presence.lock().unwrap();
-        lock.clone()
+        self.last_presence.clone()
     }
 }

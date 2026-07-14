@@ -6,8 +6,8 @@ A dual-component system that reads your local Microsoft Teams presence and updat
 
 This project consists of two parts:
 
-1. **Bridge Application (`bridge/`)**
-   A .NET 8 WPF application that runs in the Windows system tray. It polls the local Teams API (with fallback to log parsing) and sends serial commands to the ESP32. It features a system tray icon for status monitoring and a settings window for configuring colors.
+1. **Bridge Application (`bridge/teams-presence-bridge-rs/`)**
+   A Rust application that runs in the Windows system tray. It polls the local Teams API (with fallback to log parsing) and sends serial commands to the ESP32. It features a system tray icon for status monitoring and a settings window for configuring colors.
 
 2. **Firmware (`firmware/`)**
    PlatformIO / Arduino firmware for the **Seeed XIAO ESP32-S3**. It listens for serial commands, drives WS2812B LEDs using FastLED, and handles animations (solid, breathing).

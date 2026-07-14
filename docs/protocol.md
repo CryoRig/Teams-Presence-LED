@@ -40,21 +40,27 @@ Starts a continuous "breathing" (pulsing) effect using the specified color with 
   - `G`: Green component (0-255)
   - `B`: Blue component (0-255)
 
-### 4. Turn Off
+### 4. Set Global Brightness
+Sets the global brightness level for all LEDs.
+- **Format:** `BRIGHTNESS:N\n`
+- **Arguments:**
+  - `N`: Brightness level (0-255)
+
+### 5. Turn Off
 Turns all LEDs off immediately.
 - **Format:** `OFF\n`
 
-### 5. Heartbeat / Ping
+### 6. Heartbeat / Ping
 Used by the Bridge to verify that the ESP32 is still connected and responsive.
 - **Format (Bridge to ESP32):** `PING\n`
 - **Response (ESP32 to Bridge):** `PONG\n`
 
-### 6. Reset
+### 7. Reset
 Triggers a software reboot of the ESP32. Intended for development and diagnostic use.
 - **Format:** `RESET\n`
 - **Response (before reboot):** `REBOOTING\n`
 
-### 7. Help
+### 8. Help
 Prints a human-readable summary of all available commands to the serial console.
 - **Format:** `HELP\n` or `?\n`
 - **Response:** Multi-line text listing all commands (for developer reference only; not intended for machine parsing).

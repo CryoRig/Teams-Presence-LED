@@ -8,7 +8,7 @@ This guide covers the one-time setup required to build and debug both the firmwa
 |------|---------|---------|
 | [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
 | [Python 3](https://www.python.org/) | 3.8+ | Serial test tooling |
-| [.NET SDK](https://dotnet.microsoft.com/) | 8.0+ | Bridge application |
+| [Rust](https://rustup.rs/) | 1.80+ (or stable) | Bridge application |
 
 ## Board
 
@@ -79,12 +79,12 @@ Replace `COM3` with the actual port shown in Device Manager.
 
 ## Bridge Application
 
-The bridge is a WPF application that runs in the Windows system tray. It features a system tray icon for status monitoring and a settings window for configuring colors.
+The bridge is a Rust application that runs in the Windows system tray. It features a system tray icon for status monitoring and a settings window for configuring colors.
 
 ```bash
-cd bridge/TeamsPresenceBridge
-dotnet restore
-dotnet run
+cd bridge/teams-presence-bridge-rs
+cargo build --release
+cargo run --release
 ```
 
 The bridge reads `config.json` for the presence-to-command mapping and COM port settings. By default, it uses `"comPort": "AUTO"` to auto-detect the ESP32.

@@ -31,6 +31,7 @@ enum State {
 
 State currentState = STATE_OFF;
 CRGB targetColor = CRGB::Black;
+CRGB lastHardwareColor = CRGB::Black;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
 float breatheAngle = 0.0f;
@@ -41,6 +42,10 @@ int  serialBufLen = 0;
 
 // --- Helper: set all LEDs to a color and show ---
 void showSolid(CRGB color) {
+    // If the requested color is already on the strip, do nothing
+    if (color == lastHardwareColor) return; 
+
+    lastHardwareColor = color; // Update the cache
     fill_solid(leds, NUM_LEDS, color);
     FastLED.show();
 }

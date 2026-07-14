@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <FastLED.h>
+#include <Wifi.h>
 #include <math.h>
 
 // --- Configuration ---
@@ -87,6 +88,10 @@ void bootAnimation() {
 }
 
 void setup() {
+    // Explicitly disable unused radios
+    WiFi.mode(WIFI_OFF);
+    btStop();
+
     Serial.begin(115200);
     unsigned long serialStart = millis();
     while (!Serial && millis() - serialStart < 3000) { ; }

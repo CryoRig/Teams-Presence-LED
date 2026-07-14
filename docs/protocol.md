@@ -65,6 +65,12 @@ Prints a human-readable summary of all available commands to the serial console.
 - **Format:** `HELP\n` or `?\n`
 - **Response:** Multi-line text listing all commands (for developer reference only; not intended for machine parsing).
 
+### 9. Set Transition Duration
+Sets the duration for crossfade transitions between LED states.
+- **Format:** `TRANSITION:N\n`
+- **Arguments:**
+  - `N`: Transition duration in milliseconds (0-10000). A value of 0 disables transitions (instant snap).
+
 ## Error Handling & Edge Cases
 
 1. **Malformed Commands:** If the ESP32 receives a command that does not match any of the above formats, it should ignore the command and remain in its current state.

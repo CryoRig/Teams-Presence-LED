@@ -157,7 +157,7 @@ impl eframe::App for TeamsBridgeApp {
                 });
 
             ui.add_space(20.0);
-            ui.heading("Brightness");
+            ui.heading("Brightness & Transitions");
             ui.add_space(5.0);
 
             let brightness_pct = (self.local_config.brightness as f32 / 255.0 * 100.0).round() as u32;
@@ -171,6 +171,17 @@ impl eframe::App for TeamsBridgeApp {
                 // Live preview: immediately push brightness to shared config
                 // so the bridge loop picks it up and sends to ESP
                 self.config.lock().unwrap().brightness = new_brightness;
+            }
+
+            let mut transition_val = self.local_config.transition_duration_ms as i32;
+            let transition_slider = egui::Slider::new(&mut transition_val, 0..=2000)
+                .step_by(50.0)
+                .suffix(" ms")
+                .text("Transition Duration (0 = Disabled)");
+            if ui.add(transition_slider).changed() {
+                let new_transition = transition_val as u16;
+                self.local_config.transition_duration_ms = new_transition;
+                self.config.lock().unwrap().transition_duration_ms = new_transition;
             }
 
             ui.add_space(20.0);

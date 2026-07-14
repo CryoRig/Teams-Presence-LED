@@ -10,12 +10,18 @@ pub struct Config {
     pub ping_interval_ms: u64,
     #[serde(default = "default_brightness")]
     pub brightness: u8,
+    #[serde(default = "default_transition")]
+    pub transition_duration_ms: u16,
     pub presence_map: HashMap<String, ColorCommand>,
     pub watchdog: ColorCommand,
 }
 
 fn default_brightness() -> u8 {
     191 // ~75% of 255
+}
+
+fn default_transition() -> u16 {
+    500
 }
 
 impl Default for Config {
@@ -33,6 +39,7 @@ impl Default for Config {
             poll_interval_ms: 5000,
             ping_interval_ms: 10000,
             brightness: 191, // ~75%
+            transition_duration_ms: 500,
             presence_map,
             watchdog: ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 },
         }
@@ -57,11 +64,7 @@ impl ColorCommand {
     }
 }
 
-impl Config {
-    pub fn brightness_command(&self) -> String {
-        format!("BRIGHTNESS:{}\n", self.brightness)
-    }
-}
+// Methods brightness_command and transition_command were removed as they are unused
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(path)?;

@@ -75,6 +75,11 @@ impl SerialManager {
         self.send_command(&cmd);
     }
 
+    pub fn send_transition(&mut self, value: u16) {
+        let cmd = format!("TRANSITION:{}\n", value);
+        self.send_command(&cmd);
+    }
+
     fn auto_detect_port() -> Option<String> {
         let ports = serialport::available_ports().unwrap_or_default();
         

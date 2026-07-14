@@ -101,6 +101,7 @@ fn run_bridge_loop(
     let mut last_ping_time = Instant::now();
     let mut last_poll_time = Instant::now();
     let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
+    let mut last_sent_transition: Option<u16> = None; // Track to detect live slider changes
 
     // Initial connection based on initial config
     let initial_port = config.lock().unwrap().com_port.clone();
@@ -113,9 +114,9 @@ fn run_bridge_loop(
             break;
         }
 
-        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog, brightness) = {
+        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog, brightness, transition_duration_ms) = {
             let c = config.lock().unwrap();
-            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness)
+            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness, c.transition_duration_ms)
         };
 
         let now = Instant::now();
@@ -132,6 +133,8 @@ fn run_bridge_loop(
                 if serial_manager.is_connected() && was_disconnected {
                     serial_manager.send_brightness(brightness);
                     last_sent_brightness = Some(brightness);
+                    serial_manager.send_transition(transition_duration_ms);
+                    last_sent_transition = Some(transition_duration_ms);
                     previous_presence = None; // Force re-send of presence color
                 }
             }
@@ -157,6 +160,10 @@ fn run_bridge_loop(
             if last_sent_brightness != Some(brightness) {
                 serial_manager.send_brightness(brightness);
                 last_sent_brightness = Some(brightness);
+            }
+            if last_sent_transition != Some(transition_duration_ms) {
+                serial_manager.send_transition(transition_duration_ms);
+                last_sent_transition = Some(transition_duration_ms);
             }
         }
 

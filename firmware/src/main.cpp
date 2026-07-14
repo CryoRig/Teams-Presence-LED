@@ -37,32 +37,47 @@ unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
 float breatheAngle = 0.0f;
 
+// Transition state
+CRGB previousColor = CRGB::Black;
+unsigned long transitionStartTime = 0;
+bool isTransitioning = false;
+unsigned int transitionDurationMs = 500;
+
 // --- Serial input buffer (non-blocking, length-guarded) ---
 char serialBuf[SERIAL_BUF_SIZE];
 int  serialBufLen = 0;
 
 // --- Helper: set all LEDs to a color and show ---
-void showSolid(CRGB color) {
-    // If the requested color is already on the strip, do nothing
-    if (color == lastHardwareColor) return; 
+void showSolid(CRGB color, bool force = false) {
+    // If the requested color is already on the strip, do nothing unless forced
+    if (!force && color == lastHardwareColor) return; 
 
     lastHardwareColor = color; // Update the cache
     fill_solid(leds, NUM_LEDS, color);
     FastLED.show();
 }
 
-// --- Helper: advance breathe animation by one frame ---
+// --- Helper: start a transition if enabled ---
+void startStateTransition() {
+    if (transitionDurationMs > 0) {
+        previousColor = lastHardwareColor;
+        transitionStartTime = millis();
+        isTransitioning = true;
+    }
+}
+
+// --- Helper: advance breathe animation by one frame and return color ---
 // Wraps breatheAngle to [0, 2π) to prevent float precision loss over time.
-void applyBreathe(float speed, CRGB color) {
+CRGB getBreatheColor(float speed, CRGB color) {
     breatheAngle += speed;
     if (breatheAngle >= TWO_PI) breatheAngle -= TWO_PI;
     float scale = (sinf(breatheAngle) + 1.0f) / 2.0f;
     scale = scale * scale; // Approximate gamma 2.0 — simple and effective
-    showSolid(CRGB(
+    return CRGB(
         (uint8_t)(color.r * scale),
         (uint8_t)(color.g * scale),
         (uint8_t)(color.b * scale)
-    ));
+    );
 }
 
 // --- Boot animation: rainbow wave across LEDs ---
@@ -143,6 +158,7 @@ void loop() {
             Serial.println("BREATHE:R,G,B      : Moderate pulsing color");
             Serial.println("BREATHE_SLOW:R,G,B : Slow pulsing color");
             Serial.println("BRIGHTNESS:N       : Set global brightness (0-255)");
+            Serial.println("TRANSITION:N       : Set transition duration in ms (0-10000)");
             Serial.println("RESET              : Reboot the microcontroller");
             Serial.println("HELP or ?          : Show this help message");
             lastHeartbeat = now;
@@ -150,8 +166,8 @@ void loop() {
             Serial.println("PONG");
             // If we were disconnected, return to idle (OFF) state
             if (currentState == STATE_DISCONNECTED) {
+                startStateTransition();
                 currentState = STATE_OFF;
-                showSolid(CRGB::Black);
             }
             lastHeartbeat = now;
         } else if (strcmp(serialBuf, "RESET") == 0) {
@@ -169,18 +185,29 @@ void loop() {
                     lastHeartbeat = now;
                 }
             }
+        } else if (strncmp(serialBuf, "TRANSITION:", 11) == 0) {
+            unsigned int val;
+            if (sscanf(serialBuf, "TRANSITION:%u", &val) == 1) {
+                if (val <= 10000) {
+                    transitionDurationMs = val;
+                } else {
+                    transitionDurationMs = 10000;
+                }
+                Serial.println("OK");
+                lastHeartbeat = now;
+            }
         } else if (strcmp(serialBuf, "OFF") == 0) {
+            startStateTransition();
             currentState = STATE_OFF;
-            showSolid(CRGB::Black);
             Serial.println("OK");
             lastHeartbeat = now;
         } else if (strncmp(serialBuf, "SOLID:", 6) == 0) {
             int r, g, b;
             if (sscanf(serialBuf, "SOLID:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
+                    startStateTransition();
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_SOLID;
-                    showSolid(targetColor);
                     Serial.println("OK");
                     lastHeartbeat = now;
                 }
@@ -189,9 +216,9 @@ void loop() {
             int r, g, b;
             if (sscanf(serialBuf, "BREATHE_SLOW:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
+                    startStateTransition();
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_BREATHE_SLOW;
-                    breatheAngle = 0;
                     Serial.println("OK");
                     lastHeartbeat = now;
                 }
@@ -200,9 +227,9 @@ void loop() {
             int r, g, b;
             if (sscanf(serialBuf, "BREATHE:%d,%d,%d", &r, &g, &b) == 3) {
                 if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
+                    startStateTransition();
                     targetColor = CRGB(r, g, b);
                     currentState = STATE_BREATHE;
-                    breatheAngle = 0;
                     Serial.println("OK");
                     lastHeartbeat = now;
                 }
@@ -223,12 +250,32 @@ void loop() {
     if (now - lastFrameTime >= FRAME_MS) {
         lastFrameTime = now;
 
+        CRGB nextColor = CRGB::Black;
+
         if (currentState == STATE_BREATHE) {
-            applyBreathe(BREATHE_SPEED_MODERATE, targetColor);
+            nextColor = getBreatheColor(BREATHE_SPEED_MODERATE, targetColor);
         } else if (currentState == STATE_BREATHE_SLOW) {
-            applyBreathe(BREATHE_SPEED_SLOW, targetColor);
+            nextColor = getBreatheColor(BREATHE_SPEED_SLOW, targetColor);
         } else if (currentState == STATE_DISCONNECTED) {
-            applyBreathe(BREATHE_SPEED_MODERATE, CRGB(255, 255, 255));
+            nextColor = getBreatheColor(BREATHE_SPEED_MODERATE, CRGB(255, 255, 255));
+        } else if (currentState == STATE_SOLID) {
+            nextColor = targetColor;
+        } else if (currentState == STATE_OFF) {
+            nextColor = CRGB::Black;
+        }
+
+        if (isTransitioning) {
+            unsigned long elapsed = now - transitionStartTime;
+            if (elapsed >= transitionDurationMs) {
+                isTransitioning = false;
+                showSolid(nextColor, true); // Force update at end of transition
+            } else {
+                uint8_t progress = (elapsed * 255) / transitionDurationMs;
+                CRGB blended = blend(previousColor, nextColor, progress);
+                showSolid(blended, true); // Force update during transition
+            }
+        } else {
+            showSolid(nextColor);
         }
     }
 }

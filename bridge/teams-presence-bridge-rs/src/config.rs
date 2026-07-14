@@ -27,21 +27,22 @@ fn default_transition() -> u16 {
 impl Default for Config {
     fn default() -> Self {
         let mut presence_map = HashMap::new();
-        presence_map.insert("Available".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 255, b: 0 });
-        presence_map.insert("Busy".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 0, b: 0 });
-        presence_map.insert("DoNotDisturb".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 0, b: 0 });
-        presence_map.insert("Away".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 165, b: 0 });
-        presence_map.insert("BeRightBack".into(), ColorCommand { command: "SOLID".into(), r: 255, g: 165, b: 0 });
-        presence_map.insert("Offline".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 });
+        presence_map.insert("DoNotDisturb".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
+        presence_map.insert("Away".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 120, b: 0 });
+        presence_map.insert("Busy".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
+        presence_map.insert("BeRightBack".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 80, b: 0 });
+        presence_map.insert("Unknown".into(), ColorCommand { command: "BREATHE".into(), r: 80, g: 80, b: 80 });
+        presence_map.insert("Available".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 200, b: 0 });
+        presence_map.insert("Offline".into(), ColorCommand { command: "OFF".into(), r: 0, g: 0, b: 0 });
 
         Self {
             com_port: "AUTO".to_string(),
             poll_interval_ms: 5000,
-            ping_interval_ms: 10000,
+            ping_interval_ms: 15000,
             brightness: 191, // ~75%
             transition_duration_ms: 500,
             presence_map,
-            watchdog: ColorCommand { command: "SOLID".into(), r: 0, g: 0, b: 0 },
+            watchdog: ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 255, b: 255 },
         }
     }
 }

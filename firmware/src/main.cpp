@@ -185,6 +185,7 @@ void setup() {
 
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 500mA for USB safety
     FastLED.setBrightness(BRIGHTNESS);
     showSolid(CRGB::Black);
 

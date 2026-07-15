@@ -7,8 +7,7 @@ This guide covers the one-time setup required to build and debug both the firmwa
 | Tool | Version | Purpose |
 |------|---------|---------|
 | [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
-| [Python 3](https://www.python.org/) | 3.8+ | Serial test tooling |
-| [Rust](https://rustup.rs/) | 1.80+ (or stable) | Bridge application |
+| [Rust](https://rustup.rs/) | 1.80+ (or stable) | Bridge application & diagnostic tools |
 
 ## Board
 
@@ -60,40 +59,36 @@ The PlatformIO debugger uses `esp-builtin` (on-chip JTAG via OpenOCD). To start 
 2. Set a breakpoint in `setup()` or `loop()`
 3. Press F5 or use the PlatformIO Debug sidebar
 
-## Python Tools
+## Diagnostic Tools
 
-Install dependencies for the serial test script:
+A diagnostic tool is provided to list all HID devices visible to the system and confirm the ESP32 is correctly enumerated.
 
-```bash
-cd tools
-pip install -r requirements.txt
-```
-
-Run the interactive serial test tool:
-
-```bash
-python serial_test.py COM3
-```
-
-Replace `COM3` with the actual port shown in Device Manager.
-
-## Bridge Application
-
-The bridge is a Rust application that runs in the Windows system tray. It features a system tray icon for status monitoring and a settings window for configuring colors.
+Run the diagnostic tool from the bridge directory:
 
 ```bash
 cd bridge/teams-presence-bridge-rs
-cargo build --release
-cargo run --release
+cargo run --release --bin hid_diag
 ```
 
-The bridge reads `config.json` for the presence-to-command mapping and COM port settings. By default, it uses `"comPort": "AUTO"` to auto-detect the ESP32.
+## Bridge Setup
+
+1. Make sure you have Rust and Cargo installed.
+2. In a terminal, navigate to the `bridge/teams-presence-bridge-rs` directory.
+3. Run the application:
+   ```bash
+   cargo run --release
+   ```
+4. The application will start in the system tray. It will automatically detect the ESP32 via USB HID and connect.
+
+## Testing
+
+You can use the system tray menu to view connection status. You can no longer send raw commands like `SOLID:255,0,0` through the serial monitor, as the device now expects binary HID reports. The serial monitor (115200 baud) is only used for `HELP`, `RESET`, and debug logging.
 
 ## Verification Checklist
 
 Before integrating firmware and bridge, confirm:
 
-- [ ] The XIAO ESP32-S3 appears as a COM port in Device Manager
+- [ ] The XIAO ESP32-S3 appears as a COM port (for debug logging) AND as a USB Input Device (HID) in Device Manager
 - [ ] `pio run --target upload` flashes successfully and `Serial.println("BOOT")` appears in `pio device monitor`
-- [ ] `tools/serial_test.py` can send `PING` and receive `PONG`
+- [ ] The Rust diagnostic tool `hid_diag` lists the device under usage page `0xFF00`
 - [ ] The PlatformIO debugger attaches with `debug_tool = esp-builtin` and breakpoints work

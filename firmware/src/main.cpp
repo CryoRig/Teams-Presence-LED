@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <FastLED.h>
-#include <WiFi.h>
 #include <math.h>
 #include "USB.h"
 #include "USBHIDVendor.h"
@@ -182,10 +181,6 @@ static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t even
 }
 
 void setup() {
-    // Explicitly disable unused radios
-    WiFi.mode(WIFI_OFF);
-    btStop();
-
     Vendor.onEvent(vendor_event_cb);
     Vendor.begin();
     USB.begin();

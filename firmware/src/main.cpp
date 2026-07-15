@@ -6,6 +6,7 @@
 #include <math.h>
 #include "USB.h"
 #include "USBHIDVendor.h"
+#include <soc/rtc_cntl_reg.h>
 
 USBHIDVendor Vendor(5); // 5 bytes payload
 
@@ -166,6 +167,9 @@ static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t even
             case 0x08: // RESET
                 Serial.println("REBOOTING (via HID)");
                 Serial.flush();
+                break;
+            case 0x09: // BOOTLOADER
+                REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
                 ESP.restart();
                 break;
             default:

@@ -14,6 +14,7 @@ pub struct TeamsBridgeApp {
     teams_status_item: tray_icon::menu::MenuItem,
     config_path: String,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    autostart_enabled: bool,
 }
 
 impl TeamsBridgeApp {
@@ -75,6 +76,7 @@ impl TeamsBridgeApp {
             teams_status_item,
             config_path,
             shutdown_flag,
+            autostart_enabled: crate::autostart::is_autostart_enabled(),
         }
     }
 }
@@ -123,6 +125,16 @@ impl eframe::App for TeamsBridgeApp {
                 .spacing([20.0, 10.0])
                 .min_col_width(120.0)
                 .show(ui, |ui| {
+                    ui.label("Run on Windows Startup:");
+                    if ui.checkbox(&mut self.autostart_enabled, "Enable Autostart").changed() {
+                        if let Err(e) = crate::autostart::set_autostart(self.autostart_enabled) {
+                            eprintln!("Failed to update autostart setting: {}", e);
+                            // Revert on failure
+                            self.autostart_enabled = !self.autostart_enabled;
+                        }
+                    }
+                    ui.end_row();
+
                     ui.label("Poll Interval (ms):");
                     ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000));
                     ui.end_row();

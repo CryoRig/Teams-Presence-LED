@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"] // Hides the console window on Windows
 
+mod autostart;
 mod config;
 mod hid;
 mod teams;

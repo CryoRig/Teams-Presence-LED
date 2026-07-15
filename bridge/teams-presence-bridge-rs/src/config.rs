@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
-    pub com_port: String,
     pub poll_interval_ms: u64,
     pub ping_interval_ms: u64,
     #[serde(default = "default_brightness")]
@@ -36,7 +35,6 @@ impl Default for Config {
         presence_map.insert("Offline".into(), ColorCommand { command: "OFF".into(), r: 0, g: 0, b: 0 });
 
         Self {
-            com_port: "AUTO".to_string(),
             poll_interval_ms: 5000,
             ping_interval_ms: 15000,
             brightness: 191, // ~75%
@@ -56,12 +54,15 @@ pub struct ColorCommand {
 }
 
 impl ColorCommand {
-    pub fn to_serial_command(&self) -> String {
-        if self.command == "OFF" {
-            "OFF\n".to_string()
-        } else {
-            format!("{}:{},{},{}\n", self.command, self.r, self.g, self.b)
-        }
+    pub fn to_hid_params(&self) -> (u8, u8, u8, u8) {
+        let cmd_id = match self.command.as_str() {
+            "OFF" => 0x02,
+            "SOLID" => 0x03,
+            "BREATHE" => 0x04,
+            "BREATHE_SLOW" => 0x05,
+            _ => 0x02, // fallback to OFF
+        };
+        (cmd_id, self.r, self.g, self.b)
     }
 }
 

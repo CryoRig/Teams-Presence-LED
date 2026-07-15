@@ -16,7 +16,6 @@ USBHIDVendor Vendor(5); // 5 bytes payload
 #define BRIGHTNESS       255      // Max brightness — protocol RGB values control intensity
 #define WATCHDOG_TIMEOUT 60000    // 60 seconds without PING → disconnected state
 #define FRAME_MS         17       // ~16.67 ms → 60 FPS (rounded to nearest ms)
-#define SERIAL_BUF_SIZE  64       // Max serial command length (bytes)
 
 // Breathing speed constants (radians per frame at 60 FPS)
 // Full sine cycle = 2π radians. At 60 FPS:
@@ -48,9 +47,6 @@ unsigned long transitionStartTime = 0;
 bool isTransitioning = false;
 unsigned int transitionDurationMs = 500;
 
-// --- Serial input buffer (non-blocking, length-guarded) ---
-char serialBuf[SERIAL_BUF_SIZE];
-int  serialBufLen = 0;
 
 // --- Helper: set all LEDs to a color and show ---
 void showSolid(CRGB color, bool force = false) {
@@ -164,8 +160,7 @@ static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t even
                 lastHeartbeat = millis();
                 break;
             case 0x08: // RESET
-                Serial.println("REBOOTING (via HID)");
-                Serial.flush();
+                ESP.restart();
                 break;
             case 0x09: // BOOTLOADER
                 REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
@@ -183,11 +178,11 @@ static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t even
 void setup() {
     Vendor.onEvent(vendor_event_cb);
     Vendor.begin();
+    USB.productName("Teams Presence LED");
+    USB.manufacturerName("Sim-Lab");
     USB.begin();
 
-    Serial.begin(115200);
-    unsigned long serialStart = millis();
-    while (!Serial && millis() - serialStart < 3000) { ; }
+
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setBrightness(BRIGHTNESS);
@@ -196,51 +191,10 @@ void setup() {
     bootAnimation();
 
     lastHeartbeat = millis();
-    Serial.println("\n--- XIAO ESP32-S3 PRESENCE INDICATOR v0.2.0 ---");
-}
-
-// --- Helper: read one complete line from Serial without blocking ---
-// Returns true when a '\n'-terminated line is ready.
-// Silently discards lines that exceed SERIAL_BUF_SIZE to prevent heap growth.
-bool readSerialLine() {
-    while (Serial.available() > 0) {
-        char c = (char)Serial.read();
-        if (c == '\r') continue;          // strip CR from CRLF hosts
-        if (c == '\n') {
-            serialBuf[serialBufLen] = '\0';
-            serialBufLen = 0;
-            return true;
-        }
-        if (serialBufLen < SERIAL_BUF_SIZE - 1) {
-            serialBuf[serialBufLen++] = c;
-        }
-        // Overflow: discard character (buffer flushes on next '\n')
-    }
-    return false;
 }
 
 void loop() {
     unsigned long now = millis();
-
-    // 1. Handle Serial Input
-    if (readSerialLine()) {
-        if (serialBuf[0] == '\0') {
-            // Ignore empty lines
-        } else if (strcmp(serialBuf, "HELP") == 0 || strcmp(serialBuf, "?") == 0) {
-            Serial.println("--- Teams Presence LED v0.2.0 ---");
-            Serial.println("--- Commands ---");
-            Serial.println("HELP or ?          : Show this help message");
-            Serial.println("RESET              : Reboot the microcontroller");
-            Serial.println("NOTE: Communication has migrated to USB HID. Other serial commands are ignored.");
-        } else if (strcmp(serialBuf, "RESET") == 0) {
-            Serial.println("REBOOTING");
-            Serial.flush();
-            ESP.restart();
-        } else {
-            Serial.print("ERR:USE_HID:");
-            Serial.println(serialBuf);
-        }
-    }
 
     // 2. Watchdog Check — any command resets the timer
     if (currentState != STATE_DISCONNECTED && now - lastHeartbeat > WATCHDOG_TIMEOUT) {

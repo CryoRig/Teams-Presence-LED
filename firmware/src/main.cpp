@@ -10,6 +10,11 @@
 USBHIDVendor Vendor(5); // 5 bytes payload
 
 
+// --- Firmware Version ---
+#define FW_VERSION_MAJOR 0
+#define FW_VERSION_MINOR 2
+#define FW_VERSION_PATCH 0
+
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
 #define NUM_LEDS         8        // Number of WS2812B LEDs in the chain
@@ -166,6 +171,12 @@ static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t even
                 REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
                 ESP.restart();
                 break;
+            case 0x0A: // VERSION
+                {
+                    uint8_t ver_response[5] = {0x0A, FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, 0x00};
+                    Vendor.write(ver_response, sizeof(ver_response));
+                    return; // Skip default 2-byte response
+                }
             default:
                 response[0] = 0xFF; // ERR
                 break;

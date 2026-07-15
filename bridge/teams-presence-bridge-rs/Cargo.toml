@@ -11,6 +11,12 @@ regex = "1.10.3"
 eframe = "0.35"
 tray-icon = "0.24"
 winreg = "0.56.0"
+ureq = { version = "2.9", features = ["json"] }
+espflash = { version = "3", default-features = false, features = ["serialport"] }
+serialport = "4"
+semver = "1.0"
+open = "5.1"
+tempfile = "3.10"
 
 [profile.release]
 opt-level = "z"  # Optimize for size

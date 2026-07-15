@@ -13,6 +13,8 @@ const HID_REPORT_ID_VENDOR: u8 = 0x06;
 const CMD_PING: u8         = 0x01;
 const CMD_BRIGHTNESS: u8   = 0x06;
 const CMD_TRANSITION: u8   = 0x07;
+const CMD_BOOTLOADER: u8   = 0x09;
+const CMD_VERSION: u8      = 0x0A;
 
 // Response status codes
 const STATUS_PONG: u8 = 0x01;
@@ -93,5 +95,23 @@ impl HidManager {
 
     pub fn send_transition(&mut self, value: u16) {
         self.send_report(CMD_TRANSITION, (value >> 8) as u8, (value & 0xFF) as u8, 0, 0);
+    }
+
+    pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8)> {
+        self.send_report(CMD_VERSION, 0, 0, 0, 0);
+        if let Some(ref dev) = self.device {
+            let mut buf = [0u8; 6];
+            match dev.read_timeout(&mut buf, 500) {
+                Ok(n) if n >= 4 && buf[0] == CMD_VERSION => Some((buf[1], buf[2], buf[3])),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn enter_bootloader(&mut self) {
+        self.send_report(CMD_BOOTLOADER, 0, 0, 0, 0);
+        self.device = None;
     }
 }

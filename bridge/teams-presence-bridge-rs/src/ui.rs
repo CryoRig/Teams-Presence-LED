@@ -12,22 +12,39 @@ pub struct TeamsBridgeApp {
     last_status: crate::AppStatus,
     esp_status_item: tray_icon::menu::MenuItem,
     teams_status_item: tray_icon::menu::MenuItem,
+    update_item: tray_icon::menu::MenuItem,
     config_path: String,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
     autostart_enabled: bool,
+    flash_pause_flag: Arc<std::sync::atomic::AtomicBool>,
+    bootloader_trigger: Arc<std::sync::atomic::AtomicBool>,
+    update_ui_state: Arc<Mutex<crate::update_ui::UpdateUiState>>,
 }
 
 impl TeamsBridgeApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>, status: Arc<Mutex<crate::AppStatus>>, config_path: String, shutdown_flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        config: Arc<Mutex<Config>>,
+        status: Arc<Mutex<crate::AppStatus>>,
+        config_path: String,
+        shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+        flash_pause_flag: Arc<std::sync::atomic::AtomicBool>,
+        bootloader_trigger: Arc<std::sync::atomic::AtomicBool>,
+        update_ui_state: Arc<Mutex<crate::update_ui::UpdateUiState>>,
+    ) -> Self {
         let local_config = config.lock().unwrap().clone();
 
         let tray_menu = tray_icon::menu::Menu::new();
         let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", true, None);
         let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "🔴 Teams: Log Not Found", true, None);
+        let update_item = tray_icon::menu::MenuItem::with_id("updates", "Check for Updates", true, None);
         let quit_i = tray_icon::menu::MenuItem::with_id("quit", "Quit", true, None);
         let _ = tray_menu.append_items(&[
             &esp_status_item,
             &teams_status_item,
+            &tray_icon::menu::PredefinedMenuItem::separator(),
+            &update_item,
             &tray_icon::menu::PredefinedMenuItem::separator(),
             &quit_i,
         ]);
@@ -53,14 +70,20 @@ impl TeamsBridgeApp {
             }
         });
 
-        let ctx_quit = cc.egui_ctx.clone();
+        let ctx_menu = cc.egui_ctx.clone();
         let shutdown_quit = shutdown_flag.clone();
+        let menu_update_state = update_ui_state.clone();
         std::thread::spawn(move || {
             let receiver = tray_icon::menu::MenuEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 if event.id.0 == "quit" {
                     shutdown_quit.store(true, std::sync::atomic::Ordering::Relaxed);
-                    ctx_quit.send_viewport_cmd(egui::ViewportCommand::Close);
+                    ctx_menu.send_viewport_cmd(egui::ViewportCommand::Close);
+                } else if event.id.0 == "updates" {
+                    menu_update_state.lock().unwrap().show_window = true;
+                    ctx_menu.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx_menu.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx_menu.request_repaint();
                 }
             }
         });
@@ -74,9 +97,13 @@ impl TeamsBridgeApp {
             last_status: crate::AppStatus::default(),
             esp_status_item,
             teams_status_item,
+            update_item,
             config_path,
             shutdown_flag,
             autostart_enabled: crate::autostart::is_autostart_enabled(),
+            flash_pause_flag,
+            bootloader_trigger,
+            update_ui_state,
         }
     }
 }
@@ -87,6 +114,32 @@ impl eframe::App for TeamsBridgeApp {
 
         // --- Status Update Logic ---
         let current_status = self.status.lock().unwrap().clone();
+        
+        // Sync firmware version from status to update state
+        if let Some(fw_ver_tuple) = current_status.firmware_version {
+            if let Ok(fw_semver) = semver::Version::parse(&format!("{}.{}.{}", fw_ver_tuple.0, fw_ver_tuple.1, fw_ver_tuple.2)) {
+                let mut state = self.update_ui_state.lock().unwrap();
+                if state.firmware_current.as_ref() != Some(&fw_semver) {
+                    state.firmware_current = Some(fw_semver.clone());
+                    if let Some(ref latest) = state.latest_release {
+                        let res = crate::updater::check_updates(&state.bridge_current, Some(&fw_semver), latest);
+                        state.firmware_update_available = res.firmware_update_available;
+                        
+                        let update_avail = state.bridge_update_available || res.firmware_update_available;
+                        self.status.lock().unwrap().update_available = update_avail;
+                    }
+                }
+            }
+        } else {
+            let mut state = self.update_ui_state.lock().unwrap();
+            if state.firmware_current.is_some() {
+                state.firmware_current = None;
+                state.firmware_update_available = false;
+                self.status.lock().unwrap().update_available = state.bridge_update_available;
+            }
+        }
+
+        let current_status = self.status.lock().unwrap().clone(); // Re-read since we might have updated update_available
         if current_status != self.last_status {
             if current_status.esp_connected {
                 self.esp_status_item.set_text("🟢 ESP32: Connected (USB HID)");
@@ -100,7 +153,13 @@ impl eframe::App for TeamsBridgeApp {
                 self.teams_status_item.set_text("🔴 Teams: Log Not Found");
             }
 
-            self.last_status = current_status;
+            if current_status.update_available {
+                self.update_item.set_text("⬆ Update Available!");
+            } else {
+                self.update_item.set_text("Check for Updates");
+            }
+
+            self.last_status = current_status.clone();
         }
         // ---------------------------
         
@@ -221,6 +280,14 @@ impl eframe::App for TeamsBridgeApp {
                 }
             }
         });
+
+        crate::update_ui::render(
+            &ctx,
+            &self.update_ui_state,
+            &self.flash_pause_flag,
+            &self.bootloader_trigger,
+            current_status.esp_connected,
+        );
     }
 }
 

@@ -60,6 +60,11 @@ impl SerialManager {
     }
 
     pub fn send_ping(&mut self) {
+        // Drain any stale OK/PONG responses sitting in the buffer
+        if let Some(ref mut port) = self.port {
+            let mut drain = [0u8; 256];
+            while port.read(&mut drain).unwrap_or(0) > 0 {}
+        }
         self.send_command("PING\n");
         if let Some(ref mut port) = self.port {
             let mut buf = [0u8; 64];

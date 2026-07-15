@@ -9,7 +9,7 @@
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
 #define NUM_LEDS         8        // Number of WS2812B LEDs in the chain
 #define BRIGHTNESS       255      // Max brightness — protocol RGB values control intensity
-#define WATCHDOG_TIMEOUT 30000    // 30 seconds without PING → disconnected state
+#define WATCHDOG_TIMEOUT 60000    // 60 seconds without PING → disconnected state
 #define FRAME_MS         17       // ~16.67 ms → 60 FPS (rounded to nearest ms)
 #define SERIAL_BUF_SIZE  64       // Max serial command length (bytes)
 
@@ -179,7 +179,6 @@ void loop() {
             if (sscanf(serialBuf, "BRIGHTNESS:%d", &val) == 1) {
                 if (val >= 0 && val <= 255) {
                     FastLED.setBrightness(val);
-                    lastHardwareColor = CRGB::Black; // Invalidate cache to force refresh
                     FastLED.show();
                     Serial.println("OK");
                     lastHeartbeat = now;

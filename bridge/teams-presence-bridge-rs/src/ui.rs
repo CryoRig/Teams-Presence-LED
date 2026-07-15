@@ -5,7 +5,6 @@ use crate::config::{Config, ColorCommand};
 pub struct TeamsBridgeApp {
     config: Arc<Mutex<Config>>,
     local_config: Config,
-    com_ports: Vec<String>,
     #[allow(dead_code)]
     tray_icon: tray_icon::TrayIcon,
     is_first_frame: bool,
@@ -20,9 +19,6 @@ pub struct TeamsBridgeApp {
 impl TeamsBridgeApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: Arc<Mutex<Config>>, status: Arc<Mutex<crate::AppStatus>>, config_path: String, shutdown_flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
         let local_config = config.lock().unwrap().clone();
-        let com_ports = serialport::available_ports()
-            .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
-            .unwrap_or_default();
 
         let tray_menu = tray_icon::menu::Menu::new();
         let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", true, None);
@@ -71,7 +67,6 @@ impl TeamsBridgeApp {
         Self {
             config,
             local_config,
-            com_ports,
             tray_icon,
             is_first_frame: true,
             status,
@@ -92,8 +87,7 @@ impl eframe::App for TeamsBridgeApp {
         let current_status = self.status.lock().unwrap().clone();
         if current_status != self.last_status {
             if current_status.esp_connected {
-                let port_name = current_status.esp_port.clone().unwrap_or_default();
-                self.esp_status_item.set_text(format!("🟢 ESP32: Connected ({})", port_name));
+                self.esp_status_item.set_text("🟢 ESP32: Connected (USB HID)");
             } else {
                 self.esp_status_item.set_text("🔴 ESP32: Disconnected");
             }
@@ -129,24 +123,6 @@ impl eframe::App for TeamsBridgeApp {
                 .spacing([20.0, 10.0])
                 .min_col_width(120.0)
                 .show(ui, |ui| {
-                    ui.label("COM Port:");
-                    ui.horizontal(|ui| {
-                        egui::ComboBox::from_id_salt("com_port")
-                            .selected_text(&self.local_config.com_port)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.local_config.com_port, "AUTO".to_string(), "AUTO");
-                                for port in &self.com_ports {
-                                    ui.selectable_value(&mut self.local_config.com_port, port.clone(), port);
-                                }
-                            });
-                        if ui.button("Refresh").clicked() {
-                            self.com_ports = serialport::available_ports()
-                                .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
-                                .unwrap_or_default();
-                        }
-                    });
-                    ui.end_row();
-
                     ui.label("Poll Interval (ms):");
                     ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000));
                     ui.end_row();

@@ -2,8 +2,13 @@
 
 #include <Arduino.h>
 #include <FastLED.h>
-#include <Wifi.h>
+#include <WiFi.h>
 #include <math.h>
+#include "USB.h"
+#include "USBHIDVendor.h"
+
+USBHIDVendor Vendor(5); // 5 bytes payload
+
 
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
@@ -103,10 +108,83 @@ void bootAnimation() {
     showSolid(CRGB::Black);
 }
 
+// --- HID Callback ---
+static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    if(event_base == ARDUINO_USB_HID_VENDOR_EVENTS && event_id == ARDUINO_USB_HID_VENDOR_OUTPUT_EVENT){
+        arduino_usb_hid_vendor_event_data_t * p = (arduino_usb_hid_vendor_event_data_t *)event_data;
+        if (p->len < 4) return;
+
+        uint8_t cmd   = p->buffer[0];
+        uint8_t p1    = p->buffer[1];
+        uint8_t p2    = p->buffer[2];
+        uint8_t p3    = p->buffer[3];
+
+        uint8_t response[2] = {0x02, 0x00}; // OK by default
+
+        switch (cmd) {
+            case 0x01: // PING
+                response[0] = 0x01; // PONG
+                if (currentState == STATE_DISCONNECTED) {
+                    startStateTransition();
+                    currentState = STATE_OFF;
+                }
+                lastHeartbeat = millis();
+                break;
+            case 0x02: // OFF
+                startStateTransition();
+                currentState = STATE_OFF;
+                lastHeartbeat = millis();
+                break;
+            case 0x03: // SOLID
+                startStateTransition();
+                targetColor = CRGB(p1, p2, p3);
+                currentState = STATE_SOLID;
+                lastHeartbeat = millis();
+                break;
+            case 0x04: // BREATHE
+                startStateTransition();
+                targetColor = CRGB(p1, p2, p3);
+                currentState = STATE_BREATHE;
+                lastHeartbeat = millis();
+                break;
+            case 0x05: // BREATHE_SLOW
+                startStateTransition();
+                targetColor = CRGB(p1, p2, p3);
+                currentState = STATE_BREATHE_SLOW;
+                lastHeartbeat = millis();
+                break;
+            case 0x06: // BRIGHTNESS
+                FastLED.setBrightness(p1);
+                FastLED.show();
+                lastHeartbeat = millis();
+                break;
+            case 0x07: // TRANSITION
+                transitionDurationMs = ((uint16_t)p1 << 8) | p2;
+                if (transitionDurationMs > 10000) transitionDurationMs = 10000;
+                lastHeartbeat = millis();
+                break;
+            case 0x08: // RESET
+                Serial.println("REBOOTING (via HID)");
+                Serial.flush();
+                ESP.restart();
+                break;
+            default:
+                response[0] = 0xFF; // ERR
+                break;
+        }
+
+        Vendor.write(response, sizeof(response));
+    }
+}
+
 void setup() {
     // Explicitly disable unused radios
     WiFi.mode(WIFI_OFF);
     btStop();
+
+    Vendor.onEvent(vendor_event_cb);
+    Vendor.begin();
+    USB.begin();
 
     Serial.begin(115200);
     unsigned long serialStart = millis();
@@ -152,89 +230,15 @@ void loop() {
         } else if (strcmp(serialBuf, "HELP") == 0 || strcmp(serialBuf, "?") == 0) {
             Serial.println("--- Teams Presence LED v0.2.0 ---");
             Serial.println("--- Commands ---");
-            Serial.println("PING               : Heartbeat to keep connection alive");
-            Serial.println("OFF                : Turn off all LEDs");
-            Serial.println("SOLID:R,G,B        : Set solid color (0-255)");
-            Serial.println("BREATHE:R,G,B      : Moderate pulsing color");
-            Serial.println("BREATHE_SLOW:R,G,B : Slow pulsing color");
-            Serial.println("BRIGHTNESS:N       : Set global brightness (0-255)");
-            Serial.println("TRANSITION:N       : Set transition duration in ms (0-10000)");
-            Serial.println("RESET              : Reboot the microcontroller");
             Serial.println("HELP or ?          : Show this help message");
-            lastHeartbeat = now;
-        } else if (strcmp(serialBuf, "PING") == 0) {
-            Serial.println("PONG");
-            // If we were disconnected, return to idle (OFF) state
-            if (currentState == STATE_DISCONNECTED) {
-                startStateTransition();
-                currentState = STATE_OFF;
-            }
-            lastHeartbeat = now;
+            Serial.println("RESET              : Reboot the microcontroller");
+            Serial.println("NOTE: Communication has migrated to USB HID. Other serial commands are ignored.");
         } else if (strcmp(serialBuf, "RESET") == 0) {
             Serial.println("REBOOTING");
             Serial.flush();
             ESP.restart();
-        } else if (strncmp(serialBuf, "BRIGHTNESS:", 11) == 0) {
-            int val;
-            if (sscanf(serialBuf, "BRIGHTNESS:%d", &val) == 1) {
-                if (val >= 0 && val <= 255) {
-                    FastLED.setBrightness(val);
-                    FastLED.show();
-                    Serial.println("OK");
-                    lastHeartbeat = now;
-                }
-            }
-        } else if (strncmp(serialBuf, "TRANSITION:", 11) == 0) {
-            unsigned int val;
-            if (sscanf(serialBuf, "TRANSITION:%u", &val) == 1) {
-                if (val <= 10000) {
-                    transitionDurationMs = val;
-                } else {
-                    transitionDurationMs = 10000;
-                }
-                Serial.println("OK");
-                lastHeartbeat = now;
-            }
-        } else if (strcmp(serialBuf, "OFF") == 0) {
-            startStateTransition();
-            currentState = STATE_OFF;
-            Serial.println("OK");
-            lastHeartbeat = now;
-        } else if (strncmp(serialBuf, "SOLID:", 6) == 0) {
-            int r, g, b;
-            if (sscanf(serialBuf, "SOLID:%d,%d,%d", &r, &g, &b) == 3) {
-                if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                    startStateTransition();
-                    targetColor = CRGB(r, g, b);
-                    currentState = STATE_SOLID;
-                    Serial.println("OK");
-                    lastHeartbeat = now;
-                }
-            }
-        } else if (strncmp(serialBuf, "BREATHE_SLOW:", 13) == 0) {
-            int r, g, b;
-            if (sscanf(serialBuf, "BREATHE_SLOW:%d,%d,%d", &r, &g, &b) == 3) {
-                if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                    startStateTransition();
-                    targetColor = CRGB(r, g, b);
-                    currentState = STATE_BREATHE_SLOW;
-                    Serial.println("OK");
-                    lastHeartbeat = now;
-                }
-            }
-        } else if (strncmp(serialBuf, "BREATHE:", 8) == 0) {
-            int r, g, b;
-            if (sscanf(serialBuf, "BREATHE:%d,%d,%d", &r, &g, &b) == 3) {
-                if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                    startStateTransition();
-                    targetColor = CRGB(r, g, b);
-                    currentState = STATE_BREATHE;
-                    Serial.println("OK");
-                    lastHeartbeat = now;
-                }
-            }
         } else {
-            Serial.print("ERR:UNKNOWN_CMD:");
+            Serial.print("ERR:USE_HID:");
             Serial.println(serialBuf);
         }
     }

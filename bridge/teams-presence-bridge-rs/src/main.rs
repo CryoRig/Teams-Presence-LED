@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"] // Hides the console window on Windows
 
 mod config;
-mod serial;
+mod hid;
 mod teams;
 mod ui;
 
@@ -11,14 +11,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 use config::{load_config, Config};
-use serial::SerialManager;
+use hid::HidManager;
 use teams::TeamsClient;
 use eframe::egui;
 
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct AppStatus {
     pub esp_connected: bool,
-    pub esp_port: Option<String>,
     pub teams_parsing: bool,
 }
 
@@ -94,7 +93,7 @@ fn run_bridge_loop(
     ctx: Arc<Mutex<Option<egui::Context>>>,
     shutdown_flag: Arc<AtomicBool>,
 ) {
-    let mut serial_manager = SerialManager::new();
+    let mut hid_manager = HidManager::new();
     let mut teams_client = TeamsClient::new();
     
     let mut previous_presence: Option<String> = None;
@@ -103,20 +102,18 @@ fn run_bridge_loop(
     let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
     let mut last_sent_transition: Option<u16> = None; // Track to detect live slider changes
 
-    // Initial connection based on initial config
-    let initial_port = config.lock().unwrap().com_port.clone();
-    serial_manager.connect(&initial_port);
+    hid_manager.connect();
 
     loop {
         // Fast tick for shutdown and UI responsiveness
         if shutdown_flag.load(Ordering::Relaxed) {
-            serial_manager.send_command("OFF\n");
+            hid_manager.send_color_command(0x02, 0, 0, 0); // CMD_OFF
             break;
         }
 
-        let (current_com_port, poll_interval, ping_interval, presence_map, watchdog, brightness, transition_duration_ms) = {
+        let (poll_interval, ping_interval, presence_map, watchdog, brightness, transition_duration_ms) = {
             let c = config.lock().unwrap();
-            (c.com_port.clone(), c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness, c.transition_duration_ms)
+            (c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness, c.transition_duration_ms)
         };
 
         let now = Instant::now();
@@ -125,15 +122,15 @@ fn run_bridge_loop(
         if now.duration_since(last_poll_time).as_millis() as u64 >= poll_interval {
             last_poll_time = now;
 
-            // Try reconnect if disconnected or if port changed
-            let was_disconnected = !serial_manager.is_connected();
-            if !serial_manager.is_connected() || serial_manager.get_port_name() != Some(current_com_port.clone()) {
-                serial_manager.connect(&current_com_port);
+            // Try reconnect if disconnected
+            let was_disconnected = !hid_manager.is_connected();
+            if was_disconnected {
+                hid_manager.connect();
                 // On fresh connection, send brightness and force re-send of current presence
-                if serial_manager.is_connected() && was_disconnected {
-                    serial_manager.send_brightness(brightness);
+                if hid_manager.is_connected() {
+                    hid_manager.send_brightness(brightness);
                     last_sent_brightness = Some(brightness);
-                    serial_manager.send_transition(transition_duration_ms);
+                    hid_manager.send_transition(transition_duration_ms);
                     last_sent_transition = Some(transition_duration_ms);
                     previous_presence = None; // Force re-send of presence color
                 }
@@ -142,13 +139,13 @@ fn run_bridge_loop(
             let presence = teams_client.get_presence();
             if presence != previous_presence {
                 if let Some(p) = &presence {
-                    let cmd = if let Some(c) = presence_map.get(p) {
-                        c.to_serial_command()
+                    let cmd_params = if let Some(c) = presence_map.get(p) {
+                        c.to_hid_params()
                     } else {
                         eprintln!("[Bridge] Unknown presence '{}' not in presence_map, sending watchdog command", p);
-                        watchdog.to_serial_command()
+                        watchdog.to_hid_params()
                     };
-                    serial_manager.send_command(&cmd);
+                    hid_manager.send_color_command(cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
                     last_ping_time = Instant::now(); // Presence command proves host is alive
                 }
                 previous_presence = presence.clone();
@@ -156,34 +153,32 @@ fn run_bridge_loop(
         }
 
         // 2. Fast tick updates: Live brightness update from UI
-        if serial_manager.is_connected() {
+        if hid_manager.is_connected() {
             if last_sent_brightness != Some(brightness) {
-                serial_manager.send_brightness(brightness);
+                hid_manager.send_brightness(brightness);
                 last_sent_brightness = Some(brightness);
             }
             if last_sent_transition != Some(transition_duration_ms) {
-                serial_manager.send_transition(transition_duration_ms);
+                hid_manager.send_transition(transition_duration_ms);
                 last_sent_transition = Some(transition_duration_ms);
             }
         }
 
         // 3. Ping tick
-        if serial_manager.is_connected() && now.duration_since(last_ping_time).as_millis() as u64 >= ping_interval {
-            serial_manager.send_ping();
+        if hid_manager.is_connected() && now.duration_since(last_ping_time).as_millis() as u64 >= ping_interval {
+            hid_manager.send_ping();
             last_ping_time = Instant::now();
         }
 
         // 4. Update UI Status
-        let connected = serial_manager.is_connected();
-        let port = serial_manager.get_port_name();
+        let connected = hid_manager.is_connected();
         let parsing = teams_client.has_valid_log();
 
         let mut status_changed = false;
         {
             let mut s = status.lock().unwrap();
-            if s.esp_connected != connected || s.esp_port != port || s.teams_parsing != parsing {
+            if s.esp_connected != connected || s.teams_parsing != parsing {
                 s.esp_connected = connected;
-                s.esp_port = port;
                 s.teams_parsing = parsing;
                 status_changed = true;
             }

@@ -1,8 +1,9 @@
 use std::error::Error;
 use std::fs::read;
 use std::path::Path;
-use espflash::flasher::{Flasher, ProgressCallbacks};
-use espflash::connection::reset::{ResetAfterOperation, ResetBeforeOperation};
+use espflash::flasher::Flasher;
+use espflash::target::ProgressCallbacks;
+use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
 use serialport::{available_ports, SerialPortType, UsbPortInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,9 +42,11 @@ where
         };
         (self.callback)(FlashStage::Flashing { percent });
     }
-
-    fn finish(&mut self) {
+    fn verifying(&mut self) {
         (self.callback)(FlashStage::Verifying);
+    }
+
+    fn finish(&mut self, _skipped: bool) {
     }
 }
 
@@ -89,17 +92,21 @@ pub fn flash_firmware(
         },
     };
 
-    // 3. Connect flasher
-    let mut flasher = Flasher::connect(
-        *Box::new(serial_port),
+    let connection = Connection::new(
+        serial_port,
         usb_info,
-        None, // Default speed
-        true, // Use stub
-        true, // Verify
-        false, // Skip
-        None, // Chip auto-detect
         ResetAfterOperation::HardReset,
         ResetBeforeOperation::DefaultReset,
+        115_200,
+    );
+
+    let mut flasher = Flasher::connect(
+        connection,
+        true, // use_stub
+        true, // verify
+        false, // skip
+        None, // chip auto-detect
+        None, // default baud
     )?;
 
     // 4. Read firmware binary
@@ -115,7 +122,7 @@ pub fn flash_firmware(
 
     progress_cb(FlashStage::Erasing);
 
-    flasher.write_bin_to_flash(0x10000, &binary_data, Some(&mut tracker))?;
+    flasher.write_bin_to_flash(0x10000, &binary_data, &mut tracker)?;
 
     progress_cb(FlashStage::Resetting);
     

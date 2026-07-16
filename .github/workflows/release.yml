@@ -22,6 +22,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge/teams-presence-bridge-rs
+          cache-targets: false
 
       - name: Build bridge app
         working-directory: bridge/teams-presence-bridge-rs

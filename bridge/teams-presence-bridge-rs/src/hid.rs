@@ -75,7 +75,7 @@ impl HidManager {
         if let Some(ref dev) = self.device {
             let mut buf = [0u8; 6]; // report data (up to report size)
             match dev.read_timeout(&mut buf, 100) {
-                Ok(n) if n > 0 && buf[0] == STATUS_PONG => { /* OK */ }
+                Ok(n) if n > 1 && buf[1] == STATUS_PONG => { /* OK */ }
                 Err(e) => {
                     eprintln!("[HidManager] Read error during ping: {}", e);
                     self.device = None;
@@ -102,7 +102,7 @@ impl HidManager {
         if let Some(ref dev) = self.device {
             let mut buf = [0u8; 6];
             match dev.read_timeout(&mut buf, 500) {
-                Ok(n) if n >= 4 && buf[0] == CMD_VERSION => Some((buf[1], buf[2], buf[3])),
+                Ok(n) if n >= 5 && buf[1] == CMD_VERSION => Some((buf[1], buf[2], buf[3])),
                 _ => None,
             }
         } else {

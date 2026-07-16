@@ -4,6 +4,7 @@ use std::io::copy;
 use std::path::PathBuf;
 use serde::Deserialize;
 use semver::Version;
+use ureq::tls::{RootCerts, TlsConfig};
 
 const GITHUB_REPO: &str = "CryoRig/Teams-Presence-LED";
 const FIRMWARE_ASSET_NAME: &str = "firmware.bin";
@@ -48,11 +49,27 @@ fn parse_tag_to_semver(tag: &str) -> Result<Version, Box<dyn Error>> {
     Ok(ver)
 }
 
+/// Build an ureq Agent that validates TLS certificates against the platform's
+/// certificate store (e.g. Windows Certificate Store). This ensures that
+/// corporate CA certificates installed on the host are trusted, which is
+/// required in environments with TLS-inspecting corporate firewalls.
+fn build_agent() -> ureq::Agent {
+    let tls_config = TlsConfig::builder()
+        .root_certs(RootCerts::PlatformVerifier)
+        .build();
+
+    ureq::Agent::config_builder()
+        .tls_config(tls_config)
+        .build()
+        .new_agent()
+}
+
 pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
     
     // GitHub API requires a User-Agent and standard headers
-    let response: GithubRelease = ureq::get(&url)
+    let response: GithubRelease = build_agent()
+        .get(&url)
         .header("User-Agent", "teams-presence-bridge-rs")
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2026-03-10")
@@ -107,7 +124,8 @@ pub fn check_updates(
 pub fn download_firmware(url: &str) -> Result<PathBuf, Box<dyn Error>> {
     let file_path = std::env::temp_dir().join(format!("teams_presence_fw_{}.bin", uuid_like_random()));
     
-    let response = ureq::get(url)
+    let response = build_agent()
+        .get(url)
         .header("User-Agent", "teams-presence-bridge-rs")
         .call()?;
     

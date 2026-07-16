@@ -11,7 +11,7 @@ regex = "1.10.3"
 eframe = "0.35"
 tray-icon = "0.24"
 winreg = "0.56.0"
-ureq = { version = "2.9", features = ["json"] }
+ureq = { version = "3", features = ["json", "platform-verifier", "rustls-no-provider"], default-features = false }
 espflash = { version = "3", default-features = false, features = ["serialport"] }
 serialport = "4"
 semver = "1.0"

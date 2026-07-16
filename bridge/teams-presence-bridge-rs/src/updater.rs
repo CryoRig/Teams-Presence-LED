@@ -51,11 +51,14 @@ fn parse_tag_to_semver(tag: &str) -> Result<Version, Box<dyn Error>> {
 pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
     
-    // GitHub API requires a User-Agent
+    // GitHub API requires a User-Agent and standard headers
     let response: GithubRelease = ureq::get(&url)
-        .set("User-Agent", "teams-presence-bridge-rs")
+        .header("User-Agent", "teams-presence-bridge-rs")
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2026-03-10")
         .call()?
-        .into_json()?;
+        .into_body()
+        .read_json()?;
 
     let version = parse_tag_to_semver(&response.tag_name)?;
 
@@ -105,11 +108,11 @@ pub fn download_firmware(url: &str) -> Result<PathBuf, Box<dyn Error>> {
     let file_path = std::env::temp_dir().join(format!("teams_presence_fw_{}.bin", uuid_like_random()));
     
     let response = ureq::get(url)
-        .set("User-Agent", "teams-presence-bridge-rs")
+        .header("User-Agent", "teams-presence-bridge-rs")
         .call()?;
     
     let mut dest = File::create(&file_path)?;
-    copy(&mut response.into_reader(), &mut dest)?;
+    copy(&mut response.into_body().as_reader(), &mut dest)?;
     
     Ok(file_path)
 }

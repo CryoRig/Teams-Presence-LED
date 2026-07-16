@@ -93,7 +93,7 @@ pub fn render(
                         if s.bridge_update_available {
                             ui.add_space(5.0);
                             if ui.button("Open GitHub Release Page").clicked() {
-                                let _ = open::that(&latest.html_url);
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&latest.html_url));
                             }
                         }
                     }

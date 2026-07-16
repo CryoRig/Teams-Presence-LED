@@ -2,14 +2,12 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, Duration};
-use regex::Regex;
 
 pub struct TeamsClient {
     log_directory: PathBuf,
     current_file: Option<PathBuf>,
     last_position: u64,
     last_presence: Option<String>,
-    presence_regex: Regex,
     last_dir_scan: Option<Instant>,
 }
 
@@ -29,14 +27,11 @@ impl TeamsClient {
             
         println!("[TeamsClient] Initialized using log directory: {:?}", log_directory);
 
-        let presence_regex = Regex::new(r"UserPresenceAction: \{cloud_context: https://teams\.microsoft\.com, availability: (\w+)\}").unwrap();
-
         Self {
             log_directory,
             current_file: None,
             last_position: 0,
             last_presence: None,
-            presence_regex,
             last_dir_scan: None,
         }
     }
@@ -101,10 +96,12 @@ impl TeamsClient {
                         self.last_position += contents.len() as u64;
 
                         let mut current_status = None;
+                        let prefix = "UserPresenceAction: {cloud_context: https://teams.microsoft.com, availability: ";
                         for line in contents.lines() {
-                            if line.contains("UserPresenceAction") {
-                                if let Some(cap) = self.presence_regex.captures(line) {
-                                    let status = cap.get(1).unwrap().as_str();
+                            if let Some(start) = line.find(prefix) {
+                                let remainder = &line[start + prefix.len()..];
+                                if let Some(end) = remainder.find('}') {
+                                    let status = &remainder[..end];
                                     if status != "PresenceUnknown" {
                                         current_status = Some(status.to_string());
                                     }

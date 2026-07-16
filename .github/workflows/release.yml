@@ -1,0 +1,61 @@
+name: Build and Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-bridge:
+    name: Build Bridge (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge/teams-presence-bridge-rs
+
+      - name: Build bridge app
+        working-directory: bridge/teams-presence-bridge-rs
+        run: cargo build --release
+
+      - name: Upload bridge exe to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} bridge\teams-presence-bridge-rs\target\release\TeamsPresenceBridge.exe
+
+  build-firmware:
+    name: Build Firmware (ESP32)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: platformio-
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run
+
+      - name: Upload firmware bin to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} firmware/.pio/build/seeed_xiao_esp32s3/firmware.bin

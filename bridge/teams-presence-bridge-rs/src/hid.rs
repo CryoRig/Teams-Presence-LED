@@ -102,7 +102,7 @@ impl HidManager {
         if let Some(ref dev) = self.device {
             let mut buf = [0u8; 6];
             match dev.read_timeout(&mut buf, 500) {
-                Ok(n) if n >= 5 && buf[1] == CMD_VERSION => Some((buf[1], buf[2], buf[3])),
+                Ok(n) if n >= 5 && buf[1] == CMD_VERSION => Some((buf[2], buf[3], buf[4])),
                 _ => None,
             }
         } else {

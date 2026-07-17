@@ -13,7 +13,7 @@ USBHIDVendor Vendor(5); // 5 bytes payload
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 4
-#define FW_VERSION_PATCH 3
+#define FW_VERSION_PATCH 4
 
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1

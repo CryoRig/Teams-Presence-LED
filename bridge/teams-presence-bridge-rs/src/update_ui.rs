@@ -311,10 +311,8 @@ fn start_firmware_update(
             flash_pause_flag.store(true, Ordering::Relaxed);
         }
 
-        // Wait 2s for USB CDC port to enumerate
-        thread::sleep(std::time::Duration::from_millis(2000));
-
         // Step 3: Flash the firmware
+        // (The port enumeration wait is handled inside flash_firmware via its retry loop)
         let state_cb = state_clone.clone();
         let ctx_cb = ctx_clone.clone();
         let flash_res = flash_firmware(&fw_path, move |stage| {

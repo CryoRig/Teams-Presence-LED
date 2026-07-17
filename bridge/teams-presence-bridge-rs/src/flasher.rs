@@ -56,23 +56,38 @@ pub fn flash_firmware(
 ) -> Result<(), Box<dyn Error>> {
     progress_cb(FlashStage::Connecting);
 
-    // 1. Scan serial ports for the ESP32-S3 in bootloader mode (VID: 0x303a)
-    let ports = available_ports()?;
-    let mut esp_port = None;
-
-    for port in ports {
-        if let SerialPortType::UsbPort(info) = &port.port_type {
-            if info.vid == 0x303a {
-                esp_port = Some(port.clone());
+    // 1. Scan serial ports for the ESP32-S3 in bootloader mode (VID: 0x303a).
+    // After sending the bootloader command via HID, the device re-enumerates as
+    // a USB-CDC/JTAG device. On Windows this can take several seconds, so we
+    // poll with retries for up to 20 s instead of doing a single scan.
+    let port_info = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut found = None;
+        eprintln!("[Flasher] Waiting for ESP32-S3 (VID: 0x303a) to enumerate...");
+        while std::time::Instant::now() < deadline {
+            if let Ok(ports) = available_ports() {
+                for port in ports {
+                    if let SerialPortType::UsbPort(ref info) = port.port_type {
+                        eprintln!("[Flasher] Found USB port: {} (VID: 0x{:04x}, PID: 0x{:04x})", port.port_name, info.vid, info.pid);
+                        if info.vid == 0x303a {
+                            found = Some(port);
+                            break;
+                        }
+                    }
+                }
+            }
+            if found.is_some() {
                 break;
             }
+            std::thread::sleep(std::time::Duration::from_millis(200));
         }
-    }
-
-    let port_info = match esp_port {
-        Some(p) => p,
-        None => {
-            return Err("ESP32-S3 serial port (VID 0x303a) not found. Is it connected and in bootloader mode?".into());
+        match found {
+            Some(p) => {
+                eprintln!("[Flasher] Match found! Waiting 1.5s for Windows driver to settle...");
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                p
+            },
+            None => return Err("ESP32-S3 serial port (VID 0x303a) not found after 20 s. Is the device connected and in bootloader mode?".into()),
         }
     };
 
@@ -96,13 +111,16 @@ pub fn flash_firmware(
         serial_port,
         usb_info,
         ResetAfterOperation::HardReset,
-        ResetBeforeOperation::DefaultReset,
+        // The device is already in bootloader mode (we triggered it via HID).
+        // Sending a DTR/RTS reset pulse here would disrupt the stub upload,
+        // causing a communication error mid-flash.
+        ResetBeforeOperation::NoReset,
         115_200,
     );
 
     let mut flasher = Flasher::connect(
         connection,
-        true, // use_stub
+        false, // use_stub: false for stable USB-JTAG ROM bootloader interaction
         true, // verify
         false, // skip
         None, // chip auto-detect

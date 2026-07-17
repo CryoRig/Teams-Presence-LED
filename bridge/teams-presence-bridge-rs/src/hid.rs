@@ -1,8 +1,8 @@
 use hidapi::{HidApi, HidDevice};
 
-// ESP32-S3 XIAO default VID/PID, plus our custom usage page
-const TARGET_VID: u16 = 0x2886;
-const TARGET_PID: u16 = 0x0056;
+// Custom VID/PID for Teams Presence Bridge
+const TARGET_VID: u16 = 0x1209;
+const TARGET_PID: u16 = 0x0005;
 const USAGE_PAGE: u16 = 0xFF00;
 
 // Report ID must match HID_REPORT_ID_VENDOR from ESP32 Arduino core's USBHID.h

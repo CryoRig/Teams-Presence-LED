@@ -3,11 +3,14 @@
 #include <Arduino.h>
 #include <FastLED.h>
 #include <math.h>
-#include "USB.h"
-#include "USBHIDVendor.h"
+#ifdef ARDUINO_ARCH_ESP32
+#include "Esp32UsbManager.h"
 #include <soc/rtc_cntl_reg.h>
+#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
+#include "PicoUsbManager.h"
+#endif
 
-USBHIDVendor Vendor(5); // 5 bytes payload
+IUsbManager* usbManager = nullptr;
 
 
 // --- Firmware Version ---
@@ -110,88 +113,91 @@ void bootAnimation() {
 }
 
 // --- HID Callback ---
-static void vendor_event_cb(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    if(event_base == ARDUINO_USB_HID_VENDOR_EVENTS && event_id == ARDUINO_USB_HID_VENDOR_OUTPUT_EVENT){
-        arduino_usb_hid_vendor_event_data_t * p = (arduino_usb_hid_vendor_event_data_t *)event_data;
-        if (p->len < 4) return;
+void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
+    uint8_t response[2] = {0x02, 0x00}; // OK by default
 
-        uint8_t cmd   = p->buffer[0];
-        uint8_t p1    = p->buffer[1];
-        uint8_t p2    = p->buffer[2];
-        uint8_t p3    = p->buffer[3];
-
-        uint8_t response[2] = {0x02, 0x00}; // OK by default
-
-        switch (cmd) {
-            case 0x01: // PING
-                response[0] = 0x01; // PONG
-                if (currentState == STATE_DISCONNECTED) {
-                    startStateTransition();
-                    currentState = STATE_OFF;
-                }
-                lastHeartbeat = millis();
-                break;
-            case 0x02: // OFF
+    switch (cmd) {
+        case 0x01: // PING
+            response[0] = 0x01; // PONG
+            if (currentState == STATE_DISCONNECTED) {
                 startStateTransition();
                 currentState = STATE_OFF;
-                lastHeartbeat = millis();
-                break;
-            case 0x03: // SOLID
-                startStateTransition();
-                targetColor = CRGB(p1, p2, p3);
-                currentState = STATE_SOLID;
-                lastHeartbeat = millis();
-                break;
-            case 0x04: // BREATHE
-                startStateTransition();
-                targetColor = CRGB(p1, p2, p3);
-                currentState = STATE_BREATHE;
-                lastHeartbeat = millis();
-                break;
-            case 0x05: // BREATHE_SLOW
-                startStateTransition();
-                targetColor = CRGB(p1, p2, p3);
-                currentState = STATE_BREATHE_SLOW;
-                lastHeartbeat = millis();
-                break;
-            case 0x06: // BRIGHTNESS
-                FastLED.setBrightness(p1);
-                FastLED.show();
-                lastHeartbeat = millis();
-                break;
-            case 0x07: // TRANSITION
-                transitionDurationMs = ((uint16_t)p1 << 8) | p2;
-                if (transitionDurationMs > 10000) transitionDurationMs = 10000;
-                lastHeartbeat = millis();
-                break;
-            case 0x08: // RESET
-                ESP.restart();
-                break;
-            case 0x09: // BOOTLOADER
-                REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-                ESP.restart();
-                break;
-            case 0x0A: // VERSION
-                {
-                    uint8_t ver_response[5] = {0x0A, FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, 0x00};
-                    Vendor.write(ver_response, sizeof(ver_response));
-                    return; // Skip default 2-byte response
-                }
-            default:
-                response[0] = 0xFF; // ERR
-                break;
-        }
+            }
+            lastHeartbeat = millis();
+            break;
+        case 0x02: // OFF
+            startStateTransition();
+            currentState = STATE_OFF;
+            lastHeartbeat = millis();
+            break;
+        case 0x03: // SOLID
+            startStateTransition();
+            targetColor = CRGB(p1, p2, p3);
+            currentState = STATE_SOLID;
+            lastHeartbeat = millis();
+            break;
+        case 0x04: // BREATHE
+            startStateTransition();
+            targetColor = CRGB(p1, p2, p3);
+            currentState = STATE_BREATHE;
+            lastHeartbeat = millis();
+            break;
+        case 0x05: // BREATHE_SLOW
+            startStateTransition();
+            targetColor = CRGB(p1, p2, p3);
+            currentState = STATE_BREATHE_SLOW;
+            lastHeartbeat = millis();
+            break;
+        case 0x06: // BRIGHTNESS
+            FastLED.setBrightness(p1);
+            FastLED.show();
+            lastHeartbeat = millis();
+            break;
+        case 0x07: // TRANSITION
+            transitionDurationMs = ((uint16_t)p1 << 8) | p2;
+            if (transitionDurationMs > 10000) transitionDurationMs = 10000;
+            lastHeartbeat = millis();
+            break;
+        case 0x08: // RESET
+#if defined(ARDUINO_ARCH_ESP32)
+            ESP.restart();
+#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
+            rp2040.restart();
+#endif
+            break;
+        case 0x09: // BOOTLOADER
+#if defined(ARDUINO_ARCH_ESP32)
+            REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+            ESP.restart();
+#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
+            rp2040.rebootToBootloader();
+#endif
+            break;
+        case 0x0A: // VERSION
+            if (usbManager) {
+                usbManager->sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH);
+            }
+            return; // Skip default 2-byte response
+        default:
+            response[0] = 0xFF; // ERR
+            break;
+    }
 
-        Vendor.write(response, sizeof(response));
+    if (usbManager) {
+        usbManager->sendResponse(response[0], response[1]);
     }
 }
 
 void setup() {
-    Vendor.onEvent(vendor_event_cb);
-    Vendor.begin();
-    USB.productName("Teams Presence LED");
-    USB.manufacturerName("Sim-Lab");
-    USB.begin();
+#ifdef ARDUINO_ARCH_ESP32
+    usbManager = new Esp32UsbManager();
+#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
+    usbManager = new PicoUsbManager();
+#endif
+
+    if (usbManager) {
+        usbManager->begin(onUsbCommand);
+    }
 
 
 

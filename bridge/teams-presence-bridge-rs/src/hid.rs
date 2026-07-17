@@ -97,12 +97,12 @@ impl HidManager {
         self.send_report(CMD_TRANSITION, (value >> 8) as u8, (value & 0xFF) as u8, 0, 0);
     }
 
-    pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8)> {
+    pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
         self.send_report(CMD_VERSION, 0, 0, 0, 0);
         if let Some(ref dev) = self.device {
             let mut buf = [0u8; 6];
             match dev.read_timeout(&mut buf, 500) {
-                Ok(n) if n >= 5 && buf[1] == CMD_VERSION => Some((buf[2], buf[3], buf[4])),
+                Ok(n) if n >= 6 && buf[1] == CMD_VERSION => Some((buf[2], buf[3], buf[4], buf[5])),
                 _ => None,
             }
         } else {

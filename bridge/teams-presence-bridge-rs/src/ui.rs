@@ -119,10 +119,11 @@ impl eframe::App for TeamsBridgeApp {
         if let Some(fw_ver_tuple) = current_status.firmware_version {
             if let Ok(fw_semver) = semver::Version::parse(&format!("{}.{}.{}", fw_ver_tuple.0, fw_ver_tuple.1, fw_ver_tuple.2)) {
                 let mut state = self.update_ui_state.lock().unwrap();
-                if state.firmware_current.as_ref() != Some(&fw_semver) {
-                    state.firmware_current = Some(fw_semver.clone());
+                let new_fw_state = Some((fw_semver.clone(), fw_ver_tuple.3));
+                if state.firmware_current != new_fw_state {
+                    state.firmware_current = new_fw_state.clone();
                     if let Some(ref latest) = state.latest_release {
-                        let res = crate::updater::check_updates(&state.bridge_current, Some(&fw_semver), latest);
+                        let res = crate::updater::check_updates(&state.bridge_current, new_fw_state.as_ref(), latest);
                         state.firmware_update_available = res.firmware_update_available;
                         
                         let update_avail = state.bridge_update_available || res.firmware_update_available;

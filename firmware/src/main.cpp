@@ -175,7 +175,7 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
             break;
         case 0x0A: // VERSION
             if (usbManager) {
-                usbManager->sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH);
+                usbManager->sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
             }
             return; // Skip default 2-byte response
         default:

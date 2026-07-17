@@ -4,12 +4,12 @@ use std::thread;
 use eframe::egui;
 use semver::Version;
 use crate::updater;
-use crate::flasher::{flash_firmware, FlashStage};
+use crate::flasher::FlashStage;
 
 pub struct UpdateUiState {
     pub show_window: bool,
     pub bridge_current: Version,
-    pub firmware_current: Option<Version>,
+    pub firmware_current: Option<(Version, u8)>,
     pub latest_release: Option<updater::ReleaseInfo>,
     pub bridge_update_available: bool,
     pub firmware_update_available: bool,
@@ -106,8 +106,8 @@ pub fn render(
                     ui.label("ESP32 Firmware");
                     ui.horizontal(|ui| {
                         match &s.firmware_current {
-                            Some(v) => ui.label(format!("Current version: v{}", v)),
-                            None => ui.label("Current version: Unknown (ESP32 disconnected)"),
+                            Some((v, variant)) => ui.label(format!("Current version: v{} (Variant {})", v, variant)),
+                            None => ui.label("Current version: Unknown (Device disconnected)"),
                         };
                         if s.firmware_update_available {
                             ui.colored_label(egui::Color32::from_rgb(0, 180, 0), "⬆ Update Available!");
@@ -115,7 +115,12 @@ pub fn render(
                     });
 
                     if let Some(ref latest) = s.latest_release {
-                        if latest.firmware_download_url.is_some() {
+                        let has_fw_url = match &s.firmware_current {
+                            Some((_, 1)) => latest.firmware_download_url_esp32.is_some(),
+                            Some((_, 2)) => latest.firmware_download_url_rp2350.is_some(),
+                            _ => false,
+                        };
+                        if has_fw_url {
                             if s.firmware_update_available || s.firmware_current.is_none() {
                                 ui.add_space(5.0);
                                 ui.horizontal(|ui| {
@@ -247,11 +252,17 @@ fn start_firmware_update(
         s.latest_release.clone()
     };
 
-    let firmware_url = match latest_release.and_then(|r| r.firmware_download_url) {
+    let firmware_url = match { let s = state.lock().unwrap(); s.firmware_current.as_ref().map(|(_, v)| *v) } {
+        Some(1) => latest_release.and_then(|r| r.firmware_download_url_esp32),
+        Some(2) => latest_release.and_then(|r| r.firmware_download_url_rp2350),
+        _ => None,
+    };
+
+    let firmware_url = match firmware_url {
         Some(url) => url,
         None => {
             let mut s = state.lock().unwrap();
-            s.error_message = Some("No firmware binary found in latest release.".to_string());
+            s.error_message = Some("No firmware binary found for your device variant in the latest release.".to_string());
             return;
         }
     };
@@ -312,14 +323,27 @@ fn start_firmware_update(
         }
 
         // Step 3: Flash the firmware
-        // (The port enumeration wait is handled inside flash_firmware via its retry loop)
         let state_cb = state_clone.clone();
         let ctx_cb = ctx_clone.clone();
-        let flash_res = flash_firmware(&fw_path, move |stage| {
-            let mut s = state_cb.lock().unwrap();
-            s.flash_stage = Some(stage);
-            ctx_cb.request_repaint();
-        });
+        
+        let variant = {
+            let s = state_clone.lock().unwrap();
+            s.firmware_current.as_ref().map(|(_, v)| *v).unwrap_or(1)
+        };
+
+        let flash_res = if variant == 1 {
+            crate::flasher::flash_firmware_esp32(&fw_path, move |stage| {
+                let mut s = state_cb.lock().unwrap();
+                s.flash_stage = Some(stage);
+                ctx_cb.request_repaint();
+            })
+        } else {
+            crate::flasher::flash_firmware_uf2(&fw_path, move |stage| {
+                let mut s = state_cb.lock().unwrap();
+                s.flash_stage = Some(stage);
+                ctx_cb.request_repaint();
+            })
+        };
 
         match flash_res {
             Ok(_) => {

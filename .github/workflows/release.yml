@@ -34,7 +34,7 @@ jobs:
         run: gh release upload ${{ github.event.release.tag_name }} bridge\teams-presence-bridge-rs\target\release\TeamsPresenceBridge.exe
 
   build-firmware:
-    name: Build Firmware (ESP32)
+    name: Build Firmware
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -59,7 +59,13 @@ jobs:
         working-directory: firmware
         run: pio run
 
-      - name: Upload firmware bin to release
+      - name: Prepare firmware artifacts
+        working-directory: firmware
+        run: |
+          cp .pio/build/seeed_xiao_esp32s3/firmware.bin seeed_xiao_esp32s3.bin
+          cp .pio/build/rpipico2/firmware.uf2 rpipico2.uf2
+
+      - name: Upload firmware files to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} firmware/.pio/build/seeed_xiao_esp32s3/firmware.bin
+        run: gh release upload ${{ github.event.release.tag_name }} firmware/seeed_xiao_esp32s3.bin firmware/rpipico2.uf2

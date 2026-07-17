@@ -7,7 +7,6 @@ use semver::Version;
 use ureq::tls::{RootCerts, TlsConfig};
 
 const GITHUB_REPO: &str = "CryoRig/Teams-Presence-LED";
-const FIRMWARE_ASSET_NAME: &str = "firmware.bin";
 const BRIDGE_ASSET_NAME: &str = "TeamsPresenceBridge.exe";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -26,7 +25,8 @@ struct GithubRelease {
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
     pub version: Version,
-    pub firmware_download_url: Option<String>,
+    pub firmware_download_url_esp32: Option<String>,
+    pub firmware_download_url_rp2350: Option<String>,
     pub bridge_download_url: Option<String>,
     pub html_url: String,
 }
@@ -79,12 +79,15 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
 
     let version = parse_tag_to_semver(&response.tag_name)?;
 
-    let mut firmware_download_url = None;
+    let mut firmware_download_url_esp32 = None;
+    let mut firmware_download_url_rp2350 = None;
     let mut bridge_download_url = None;
 
     for asset in response.assets {
-        if asset.name == FIRMWARE_ASSET_NAME {
-            firmware_download_url = Some(asset.browser_download_url);
+        if asset.name == "seeed_xiao_esp32s3.bin" || asset.name == "firmware.bin" {
+            firmware_download_url_esp32 = Some(asset.browser_download_url);
+        } else if asset.name == "rpipico2.uf2" || asset.name == "firmware.uf2" {
+            firmware_download_url_rp2350 = Some(asset.browser_download_url);
         } else if asset.name == BRIDGE_ASSET_NAME {
             bridge_download_url = Some(asset.browser_download_url);
         }
@@ -92,7 +95,8 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
 
     Ok(ReleaseInfo {
         version,
-        firmware_download_url,
+        firmware_download_url_esp32,
+        firmware_download_url_rp2350,
         bridge_download_url,
         html_url: response.html_url,
     })
@@ -100,7 +104,7 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
 
 pub fn check_updates(
     bridge_current: &Version,
-    firmware_current: Option<&Version>,
+    firmware_current: Option<&(Version, u8)>,
     latest: &ReleaseInfo,
 ) -> UpdateCheckResult {
     // Bridge update is available if the latest version is greater than current bridge version
@@ -110,7 +114,7 @@ pub fn check_updates(
     // 1. ESP is connected (we have a firmware version)
     // 2. The latest version is greater than current firmware version
     let firmware_update_available = match firmware_current {
-        Some(fw_ver) => latest.version > *fw_ver,
+        Some((fw_ver, _)) => latest.version > *fw_ver,
         None => false,
     };
 

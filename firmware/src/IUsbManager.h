@@ -13,7 +13,7 @@ public:
     virtual void begin(UsbCommandCallback callback) = 0;
 
     // Send a version response directly to the host
-    virtual void sendVersion(uint8_t major, uint8_t minor, uint8_t patch) = 0;
+    virtual void sendVersion(uint8_t major, uint8_t minor, uint8_t patch, uint8_t variant) = 0;
 
     // Send a standard 2-byte response (e.g. 0x02 0x00 for OK)
     virtual void sendResponse(uint8_t status, uint8_t value) = 0;

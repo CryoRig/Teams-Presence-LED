@@ -18,6 +18,7 @@ ureq = { version = "3", features = ["json", "platform-verifier", "rustls"], defa
 espflash = { version = "4", default-features = false, features = ["serialport"] }
 serialport = "4"
 semver = "1.0"
+sysinfo = "0.30"
 
 [profile.release]
 opt-level = "z"  # Optimize for size

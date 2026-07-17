@@ -23,7 +23,7 @@ use eframe::egui;
 pub struct AppStatus {
     pub esp_connected: bool,
     pub teams_parsing: bool,
-    pub firmware_version: Option<(u8, u8, u8)>,
+    pub firmware_version: Option<(u8, u8, u8, u8)>,
     pub update_available: bool,
 }
 
@@ -228,7 +228,7 @@ fn run_bridge_loop(
                 let has_version = status.lock().unwrap().firmware_version.is_some();
                 if !has_version {
                     if let Some(ver) = hid_manager.query_firmware_version() {
-                        eprintln!("[Bridge] Queried firmware version: v{}.{}.{}", ver.0, ver.1, ver.2);
+                        eprintln!("[Bridge] Queried firmware version: v{}.{}.{} (variant: {})", ver.0, ver.1, ver.2, ver.3);
                         status.lock().unwrap().firmware_version = Some(ver);
                     }
                 }

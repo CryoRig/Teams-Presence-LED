@@ -25,8 +25,8 @@ void Esp32UsbManager::begin(UsbCommandCallback callback) {
     USB.begin();
 }
 
-void Esp32UsbManager::sendVersion(uint8_t major, uint8_t minor, uint8_t patch) {
-    uint8_t ver_response[5] = {0x0A, major, minor, patch, 0x00};
+void Esp32UsbManager::sendVersion(uint8_t major, uint8_t minor, uint8_t patch, uint8_t variant) {
+    uint8_t ver_response[5] = {0x0A, major, minor, patch, variant};
     vendor.write(ver_response, sizeof(ver_response));
 }
 

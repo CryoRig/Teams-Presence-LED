@@ -172,10 +172,12 @@ pub fn flash_firmware_uf2(
             if disk.is_removable() {
                 let mount_point = disk.mount_point();
                 let info_file = mount_point.join("INFO_UF2.TXT");
-                if info_file.exists() {
-                    target_drive = Some(mount_point.to_path_buf());
-                    break;
-                }
+                if info_file.exists()
+                    && let Ok(info_contents) = std::fs::read_to_string(&info_file)
+                        && (info_contents.contains("Board-ID: RP2350") || info_contents.contains("RP2350")) {
+                            target_drive = Some(mount_point.to_path_buf());
+                            break;
+                        }
             }
         }
         if target_drive.is_some() {

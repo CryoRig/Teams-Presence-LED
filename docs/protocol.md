@@ -7,10 +7,10 @@ This document defines the binary protocol used for communication between the **T
 - **Interface:** USB HID (Vendor Defined)
 - **Usage Page:** `0xFF00`
 - **Usage:** `0x01`
-- **Output Report Size:** 64 bytes (1 byte Report ID + 63 bytes data)
-- **Input Report Size:** 64 bytes (1 byte Report ID + 63 bytes data)
+- **Output Report Size:** 6 bytes (1 byte Report ID + 5 bytes data)
+- **Input Report Size:** 6 bytes (1 byte Report ID + 5 bytes data)
 
-*Note: The ESP32 also exposes a secondary CDC Serial interface which can be used for debugging (`HELP` and `RESET` commands) at 115200 baud.*
+*Note: The ESP32 also exposes a secondary CDC Serial interface which can be used for debugging at 115200 baud.*
 
 ## Command Set (Output Report)
 
@@ -68,6 +68,17 @@ Sets the duration for crossfade transitions between LED states.
 Triggers a software reboot of the ESP32. Intended for development and diagnostic use.
 - **Command ID:** `0x08`
 - **Parameters:** `0x00` (ignored)
+
+### 0x09: Bootloader
+Forces the device into bootloader/download mode (UF2 drive on Pico, ROM bootloader on ESP32).
+- **Command ID:** `0x09`
+- **Parameters:** `0x00` (ignored)
+
+### 0x0A: Version
+Queries the firmware version and hardware variant.
+- **Command ID:** `0x0A`
+- **Parameters:** `0x00` (ignored)
+- **Response:** Sends an Input Report with Status Code `0x0A` followed by `[Major] [Minor] [Patch] [Variant]`.
 
 ## Responses (Input Report)
 

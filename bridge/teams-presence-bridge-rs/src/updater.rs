@@ -1,13 +1,14 @@
 use std::error::Error;
-use std::fs::File;
+use std::io::Read;
 use std::io::copy;
 use std::path::PathBuf;
 use serde::Deserialize;
 use semver::Version;
+use sha2::{Digest, Sha256};
+use tempfile::Builder;
 use ureq::tls::{RootCerts, TlsConfig};
 
 const GITHUB_REPO: &str = "CryoRig/Teams-Presence-LED";
-const BRIDGE_ASSET_NAME: &str = "TeamsPresenceBridge.exe";
 
 #[derive(Debug, Clone, Deserialize)]
 struct GithubAsset {
@@ -25,26 +26,22 @@ struct GithubRelease {
 #[derive(Debug, Clone)]
 pub struct ReleaseInfo {
     pub version: Version,
+    pub firmware_version: Version,
     pub firmware_download_url_esp32: Option<String>,
     pub firmware_download_url_rp2350: Option<String>,
-    pub bridge_download_url: Option<String>,
+    pub firmware_sha256sums_url: Option<String>,
     pub html_url: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct UpdateCheckResult {
-    pub latest: ReleaseInfo,
     pub bridge_update_available: bool,
     pub firmware_update_available: bool,
 }
 
 /// Helper to parse tag name to semver, stripping leading 'v'
 fn parse_tag_to_semver(tag: &str) -> Result<Version, Box<dyn Error>> {
-    let clean_tag = if tag.starts_with('v') {
-        &tag[1..]
-    } else {
-        tag
-    };
+    let clean_tag = tag.strip_prefix('v').unwrap_or(tag);
     let ver = Version::parse(clean_tag)?;
     Ok(ver)
 }
@@ -81,23 +78,38 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
 
     let mut firmware_download_url_esp32 = None;
     let mut firmware_download_url_rp2350 = None;
-    let mut bridge_download_url = None;
+    let mut firmware_sha256sums_url = None;
+    let mut manifest_url = None;
 
     for asset in response.assets {
         if asset.name == "seeed_xiao_esp32s3.bin" || asset.name == "firmware.bin" {
             firmware_download_url_esp32 = Some(asset.browser_download_url);
         } else if asset.name == "rpipico2.uf2" || asset.name == "firmware.uf2" {
             firmware_download_url_rp2350 = Some(asset.browser_download_url);
-        } else if asset.name == BRIDGE_ASSET_NAME {
-            bridge_download_url = Some(asset.browser_download_url);
+        } else if asset.name.eq_ignore_ascii_case("SHA256SUMS") || asset.name.ends_with(".sha256") {
+            firmware_sha256sums_url = Some(asset.browser_download_url);
+        } else if asset.name == "manifest.json" {
+            manifest_url = Some(asset.browser_download_url);
         }
     }
 
+    let mut br_ver = version.clone();
+    let mut fw_ver = version.clone();
+    if let Some(m_url) = manifest_url
+        && let Ok(m_resp) = build_agent().get(&m_url).call()
+            && let Ok(json) = m_resp.into_body().read_json::<serde_json::Value>() {
+                if let Some(f) = json.get("firmware").and_then(|v| v.as_str())
+                    && let Ok(v) = Version::parse(f.trim_start_matches('v')) { fw_ver = v; }
+                if let Some(b) = json.get("bridge").and_then(|v| v.as_str())
+                    && let Ok(v) = Version::parse(b.trim_start_matches('v')) { br_ver = v; }
+            }
+
     Ok(ReleaseInfo {
-        version,
+        version: br_ver,
+        firmware_version: fw_ver,
         firmware_download_url_esp32,
         firmware_download_url_rp2350,
-        bridge_download_url,
+        firmware_sha256sums_url,
         html_url: response.html_url,
     })
 }
@@ -114,35 +126,103 @@ pub fn check_updates(
     // 1. ESP is connected (we have a firmware version)
     // 2. The latest version is greater than current firmware version
     let firmware_update_available = match firmware_current {
-        Some((fw_ver, _)) => latest.version > *fw_ver,
+        Some((fw_ver, _)) => latest.firmware_version > *fw_ver,
         None => false,
     };
 
     UpdateCheckResult {
-        latest: latest.clone(),
         bridge_update_available,
         firmware_update_available,
     }
 }
 
-pub fn download_firmware(url: &str) -> Result<PathBuf, Box<dyn Error>> {
-    let file_path = std::env::temp_dir().join(format!("teams_presence_fw_{}.bin", uuid_like_random()));
-    
+fn asset_name_from_url(url: &str) -> Result<String, Box<dyn Error>> {
+    let no_query = url.split('?').next().unwrap_or(url);
+    let name = no_query
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or("Unable to determine asset name from URL")?;
+    Ok(name.to_string())
+}
+
+fn verify_firmware_magic(url: &str, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    let lower = url.to_ascii_lowercase();
+    if lower.ends_with(".bin") {
+        if bytes.first().copied() != Some(0xE9) {
+            return Err("Downloaded .bin does not look like a valid ESP image (missing 0xE9 magic)".into());
+        }
+    } else if lower.ends_with(".uf2")
+        && (bytes.len() < 4 || &bytes[0..4] != b"UF2\n") {
+            return Err("Downloaded .uf2 does not contain UF2 magic header".into());
+        }
+    Ok(())
+}
+
+fn verify_firmware_sha256(
+    firmware_url: &str,
+    sha256sums_url: &str,
+    bytes: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let checksums = build_agent()
+        .get(sha256sums_url)
+        .header("User-Agent", "teams-presence-bridge-rs")
+        .call()?
+        .into_body()
+        .read_to_string()?;
+
+    let asset_name = asset_name_from_url(firmware_url)?;
+    let expected_hash = checksums
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let hash = parts.next()?;
+            let file = parts.next()?.trim_start_matches('*');
+            if file == asset_name {
+                Some(hash.to_string())
+            } else {
+                None
+            }
+        })
+        .next()
+        .ok_or_else(|| format!("No SHA256 entry found for '{}' in SHA256SUMS", asset_name))?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let actual_hash = format!("{:x}", hasher.finalize());
+
+    if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
+        return Err(format!(
+            "SHA256 mismatch for '{}': expected {}, got {}",
+            asset_name, expected_hash, actual_hash
+        )
+        .into());
+    }
+
+    Ok(())
+}
+
+pub fn download_firmware(url: &str, sha256sums_url: Option<&str>) -> Result<PathBuf, Box<dyn Error>> {
     let response = build_agent()
         .get(url)
         .header("User-Agent", "teams-presence-bridge-rs")
         .call()?;
-    
-    let mut dest = File::create(&file_path)?;
-    copy(&mut response.into_body().as_reader(), &mut dest)?;
-    
-    Ok(file_path)
-}
 
-fn uuid_like_random() -> u32 {
-    use std::time::SystemTime;
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_micros() as u32)
-        .unwrap_or(12345)
+    let mut bytes = Vec::new();
+    response.into_body().as_reader().read_to_end(&mut bytes)?;
+
+    verify_firmware_magic(url, &bytes)?;
+
+    let sums_url = sha256sums_url.ok_or("Release is missing SHA256SUMS asset; refusing unverified firmware download")?;
+    verify_firmware_sha256(url, sums_url, &bytes)?;
+
+    let mut tmp = Builder::new()
+        .prefix("teams_presence_fw_")
+        .suffix(".bin")
+        .tempfile_in(std::env::temp_dir())?;
+
+    copy(&mut std::io::Cursor::new(bytes), tmp.as_file_mut())?;
+
+    let (_file, file_path) = tmp.keep()?;
+    Ok(file_path)
 }

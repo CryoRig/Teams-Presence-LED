@@ -252,10 +252,12 @@ fn start_firmware_update(
         s.latest_release.clone()
     };
 
-    let firmware_url = match { let s = state.lock().unwrap(); s.firmware_current.as_ref().map(|(_, v)| *v) } {
-        Some(1) => latest_release.and_then(|r| r.firmware_download_url_esp32),
-        Some(2) => latest_release.and_then(|r| r.firmware_download_url_rp2350),
-        _ => None,
+    let variant = { let s = state.lock().unwrap(); s.firmware_current.as_ref().map(|(_, v)| *v) };
+
+    let (firmware_url, sha256sums_url) = match (latest_release, variant) {
+        (Some(r), Some(1)) => (r.firmware_download_url_esp32, r.firmware_sha256sums_url),
+        (Some(r), Some(2)) => (r.firmware_download_url_rp2350, r.firmware_sha256sums_url),
+        _ => (None, None),
     };
 
     let firmware_url = match firmware_url {
@@ -280,13 +282,14 @@ fn start_firmware_update(
 
     thread::spawn(move || {
         // Step 1: Download firmware binary
-        let fw_path = match updater::download_firmware(&firmware_url) {
+        let fw_path = match updater::download_firmware(&firmware_url, sha256sums_url.as_deref()) {
             Ok(path) => path,
             Err(e) => {
                 let mut s = state_clone.lock().unwrap();
                 s.flash_in_progress = false;
-                s.flash_stage = None;
-                s.error_message = Some(format!("Download failed: {}", e));
+                let msg = format!("Download failed: {}", e);
+                s.flash_stage = Some(FlashStage::Error(msg.clone()));
+                s.error_message = Some(msg);
                 ctx_clone.request_repaint();
                 return;
             }
@@ -310,8 +313,9 @@ fn start_firmware_update(
             if !ok {
                 let mut s = state_clone.lock().unwrap();
                 s.flash_in_progress = false;
-                s.flash_stage = None;
-                s.error_message = Some("Failed to enter bootloader mode (bridge timed out).".to_string());
+                let msg = "Failed to enter bootloader mode (bridge timed out).".to_string();
+                s.flash_stage = Some(FlashStage::Error(msg.clone()));
+                s.error_message = Some(msg);
                 let _ = std::fs::remove_file(fw_path);
                 ctx_clone.request_repaint();
                 return;
@@ -328,7 +332,7 @@ fn start_firmware_update(
         
         let variant = {
             let s = state_clone.lock().unwrap();
-            s.firmware_current.as_ref().map(|(_, v)| *v).unwrap_or(1)
+            s.firmware_current.as_ref().map(|(_, v)| *v).unwrap()
         };
 
         let flash_res = if variant == 1 {
@@ -360,8 +364,9 @@ fn start_firmware_update(
             Err(e) => {
                 let mut s = state_clone.lock().unwrap();
                 s.flash_in_progress = false;
-                s.flash_stage = None;
-                s.error_message = Some(format!("Flash failed: {}", e));
+                let msg = format!("Flash failed: {}", e);
+                s.flash_stage = Some(FlashStage::Error(msg.clone()));
+                s.error_message = Some(msg);
             }
         }
 

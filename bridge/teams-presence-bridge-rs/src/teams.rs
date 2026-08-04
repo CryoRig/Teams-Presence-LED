@@ -3,6 +3,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, Duration};
 
+const INITIAL_READ_TAIL_BYTES: u64 = 256 * 1024;
+
 pub struct TeamsClient {
     log_directory: PathBuf,
     current_file: Option<PathBuf>,
@@ -37,7 +39,9 @@ impl TeamsClient {
     }
 
     pub fn has_valid_log(&self) -> bool {
-        self.current_file.is_some()
+        self.current_file
+            .as_ref()
+            .is_some_and(|path| path.exists())
     }
 
     pub fn get_presence(&mut self) -> Option<String> {
@@ -47,27 +51,22 @@ impl TeamsClient {
 
         let mut newest_file = self.current_file.clone();
         
-        let needs_scan = self.last_dir_scan.map_or(true, |last| last.elapsed() > Duration::from_secs(60));
+        let needs_scan = self.last_dir_scan.is_none_or(|last| last.elapsed() > Duration::from_secs(60));
         
         if needs_scan {
             let mut max_time = std::time::SystemTime::UNIX_EPOCH;
             if let Ok(entries) = fs::read_dir(&self.log_directory) {
                 for entry in entries.filter_map(Result::ok) {
                     let path = entry.path();
-                    if path.is_file() {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name.starts_with("MSTeams_") && name.ends_with(".log") {
-                                if let Ok(metadata) = entry.metadata() {
-                                    if let Ok(time) = metadata.modified() {
-                                        if time > max_time {
+                    if path.is_file()
+                        && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                            && name.starts_with("MSTeams_") && name.ends_with(".log")
+                                && let Ok(metadata) = entry.metadata()
+                                    && let Ok(time) = metadata.modified()
+                                        && time > max_time {
                                             max_time = time;
                                             newest_file = Some(path);
                                         }
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
             self.last_dir_scan = Some(Instant::now());
@@ -87,32 +86,44 @@ impl TeamsClient {
                 if let Ok(metadata) = file.metadata() {
                     if metadata.len() < self.last_position {
                         self.last_position = 0;
+                    } else if self.last_position == 0 {
+                        self.last_position = metadata.len().saturating_sub(INITIAL_READ_TAIL_BYTES);
                     }
                 }
 
-                if let Ok(_) = file.seek(SeekFrom::Start(self.last_position)) {
-                    let mut contents = String::new();
-                    if let Ok(_) = file.read_to_string(&mut contents) {
-                        self.last_position += contents.len() as u64;
+                if file.seek(SeekFrom::Start(self.last_position)).is_ok() {
+                    let mut contents = Vec::new();
+                    if file.read_to_end(&mut contents).is_ok() {
+                        let last_nl = contents.iter().rposition(|&c| c == b'\n');
+                        if let Some(nl_pos) = last_nl {
+                            self.last_position += (nl_pos + 1) as u64;
+                            let valid_bytes = &contents[..=nl_pos];
+                            let text = String::from_utf8_lossy(valid_bytes);
 
-                        let mut current_status = None;
-                        let prefix = "UserPresenceAction: {cloud_context: https://teams.microsoft.com, availability: ";
-                        for line in contents.lines() {
-                            if let Some(start) = line.find(prefix) {
-                                let remainder = &line[start + prefix.len()..];
-                                if let Some(end) = remainder.find('}') {
-                                    let status = &remainder[..end];
-                                    if status != "PresenceUnknown" {
-                                        current_status = Some(status.to_string());
+                            let mut current_status = None;
+                            let prefix = "UserPresenceAction:";
+                            let avail_key = "availability: ";
+                            for line in text.lines() {
+                                if let Some(start) = line.find(prefix) {
+                                    let remainder = &line[start + prefix.len()..];
+                                    if let Some(avail_start) = remainder.find(avail_key) {
+                                        let status_start = avail_start + avail_key.len();
+                                        let status_remainder = &remainder[status_start..];
+                                        // The status goes up to the closing brace '}'
+                                        if let Some(end) = status_remainder.find('}') {
+                                            let status = status_remainder[..end].trim();
+                                            if status != "PresenceUnknown" {
+                                                current_status = Some(status.to_string());
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        if let Some(status) = current_status {
-                            if Some(&status) != self.last_presence.as_ref() {
-                                self.last_presence = Some(status);
-                            }
+                            if let Some(status) = current_status
+                                && Some(&status) != self.last_presence.as_ref() {
+                                    self.last_presence = Some(status);
+                                }
                         }
                     }
                 }

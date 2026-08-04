@@ -22,12 +22,17 @@ const STATUS_PONG: u8 = 0x01;
 pub struct HidManager {
     api: HidApi,
     device: Option<HidDevice>,
+    missing_device_logged: bool,
 }
 
 impl HidManager {
-    pub fn new() -> Self {
-        let api = HidApi::new().expect("Failed to init HID API");
-        Self { api, device: None }
+    pub fn new() -> Result<Self, hidapi::HidError> {
+        let api = HidApi::new()?;
+        Ok(Self {
+            api,
+            device: None,
+            missing_device_logged: false,
+        })
     }
 
     pub fn connect(&mut self) -> bool {
@@ -41,6 +46,7 @@ impl HidManager {
                     Ok(dev) => {
                         dev.set_blocking_mode(false).ok();
                         self.device = Some(dev);
+                        self.missing_device_logged = false;
                         eprintln!("[HidManager] Connected to HID device (VID: {:04X}, PID: {:04X})", info.vendor_id(), info.product_id());
                         return true;
                     }
@@ -50,7 +56,10 @@ impl HidManager {
                 }
             }
         }
-        eprintln!("[HidManager] No device found with usage page 0x{:04X}", USAGE_PAGE);
+        if !self.missing_device_logged {
+            eprintln!("[HidManager] No device found with usage page 0x{:04X}", USAGE_PAGE);
+            self.missing_device_logged = true;
+        }
         false
     }
 
@@ -69,20 +78,41 @@ impl HidManager {
         }
     }
 
-    pub fn send_ping(&mut self) {
-        self.send_report(CMD_PING, 0, 0, 0, 0);
-        // Read the PONG response
+    fn drain_reads(&mut self, wait_for_pong: bool, wait_for_version: bool) -> (bool, Option<(u8, u8, u8, u8)>) {
+        let mut got_pong = false;
+        let mut got_version = None;
         if let Some(ref dev) = self.device {
-            let mut buf = [0u8; 6]; // report data (up to report size)
-            match dev.read_timeout(&mut buf, 100) {
-                Ok(n) if n > 1 && buf[1] == STATUS_PONG => { /* OK */ }
-                Err(e) => {
-                    eprintln!("[HidManager] Read error during ping: {}", e);
-                    self.device = None;
+            let mut buf = [0u8; 6];
+            let start = std::time::Instant::now();
+            let timeout = if wait_for_version { 500 } else { 100 };
+            
+            while start.elapsed().as_millis() < timeout {
+                match dev.read_timeout(&mut buf, 10) {
+                    Ok(n) if n > 1 => {
+                        if buf[1] == STATUS_PONG {
+                            got_pong = true;
+                        } else if buf[1] == CMD_VERSION && n >= 6 {
+                            got_version = Some((buf[2], buf[3], buf[4], buf[5]));
+                        }
+                        if (!wait_for_pong || got_pong) && (!wait_for_version || got_version.is_some()) {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[HidManager] Read error: {}", e);
+                        self.device = None;
+                        break;
+                    }
+                    Ok(_) => {} // timeout or small n
                 }
-                _ => { /* timeout or unexpected response */ }
             }
         }
+        (got_pong, got_version)
+    }
+
+    pub fn send_ping(&mut self) {
+        self.send_report(CMD_PING, 0, 0, 0, 0);
+        self.drain_reads(true, false);
     }
 
     pub fn send_color_command(&mut self, cmd_id: u8, r: u8, g: u8, b: u8) {
@@ -99,15 +129,7 @@ impl HidManager {
 
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
         self.send_report(CMD_VERSION, 0, 0, 0, 0);
-        if let Some(ref dev) = self.device {
-            let mut buf = [0u8; 6];
-            match dev.read_timeout(&mut buf, 500) {
-                Ok(n) if n >= 6 && buf[1] == CMD_VERSION => Some((buf[2], buf[3], buf[4], buf[5])),
-                _ => None,
-            }
-        } else {
-            None
-        }
+        self.drain_reads(false, true).1
     }
 
     pub fn enter_bootloader(&mut self) {

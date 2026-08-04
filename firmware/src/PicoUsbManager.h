@@ -8,7 +8,7 @@ public:
     ~PicoUsbManager() override;
 
     void begin(UsbCommandCallback callback) override;
-    void sendVersion(uint8_t major, uint8_t minor, uint8_t patch) override;
+    void sendVersion(uint8_t major, uint8_t minor, uint8_t patch, uint8_t variant) override;
     void sendResponse(uint8_t status, uint8_t value) override;
     void loop() override;
 

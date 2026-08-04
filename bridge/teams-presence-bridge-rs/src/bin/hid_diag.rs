@@ -1,6 +1,5 @@
 /// Quick diagnostic tool to list all HID devices visible to hidapi.
 /// Run with: cargo run --release --bin hid_diag
-
 fn main() {
     println!("=== HID Device Enumeration ===\n");
 

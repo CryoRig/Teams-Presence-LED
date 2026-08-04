@@ -1,6 +1,6 @@
 [package]
 name = "teams-presence-bridge-rs"
-version = "0.4.3"
+version = "0.5.0"
 edition = "2024"
 
 [[bin]]
@@ -18,7 +18,9 @@ ureq = { version = "3", features = ["json", "platform-verifier", "rustls"], defa
 espflash = { version = "4", default-features = false, features = ["serialport"] }
 serialport = "4"
 semver = "1.0"
-sysinfo = "0.30"
+sysinfo = "0.39"
+tempfile = "3"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "z"  # Optimize for size

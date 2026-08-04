@@ -47,6 +47,7 @@ void PicoUsbManager::begin(UsbCommandCallback callback) {
     usb_hid.setReportCallback(NULL, setReportCb);
     usb_hid.begin();
     
+    if (TinyUSBDevice.mounted()) { TinyUSBDevice.detach(); delay(10); TinyUSBDevice.attach(); }
     // Wait for TinyUSB to be ready if needed, or just proceed
 }
 
@@ -56,7 +57,7 @@ void PicoUsbManager::sendVersion(uint8_t major, uint8_t minor, uint8_t patch, ui
 }
 
 void PicoUsbManager::sendResponse(uint8_t status, uint8_t value) {
-    uint8_t response[2] = {status, value};
+    uint8_t response[5] = {status, value, 0, 0, 0};
     usb_hid.sendReport(HID_REPORT_ID_VENDOR, response, sizeof(response));
 }
 

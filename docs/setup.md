@@ -7,7 +7,7 @@ This guide covers the one-time setup required to build and debug both the firmwa
 | Tool | Version | Purpose |
 |------|---------|---------|
 | [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
-| [Rust](https://rustup.rs/) | 1.80+ (or stable) | Bridge application & diagnostic tools |
+| [Rust](https://rustup.rs/) | 1.92+ (or stable) | Bridge application & diagnostic tools |
 
 ## Board
 

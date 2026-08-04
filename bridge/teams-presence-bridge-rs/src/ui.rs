@@ -19,6 +19,7 @@ pub struct TeamsBridgeApp {
     flash_pause_flag: Arc<std::sync::atomic::AtomicBool>,
     bootloader_trigger: Arc<std::sync::atomic::AtomicBool>,
     update_ui_state: Arc<Mutex<crate::update_ui::UpdateUiState>>,
+    config_dirty: bool,
 }
 
 impl TeamsBridgeApp {
@@ -104,6 +105,7 @@ impl TeamsBridgeApp {
             flash_pause_flag,
             bootloader_trigger,
             update_ui_state,
+            config_dirty: false,
         }
     }
 }
@@ -186,21 +188,24 @@ impl eframe::App for TeamsBridgeApp {
                 .min_col_width(120.0)
                 .show(ui, |ui| {
                     ui.label("Run on Windows Startup:");
-                    if ui.checkbox(&mut self.autostart_enabled, "Enable Autostart").changed() {
-                        if let Err(e) = crate::autostart::set_autostart(self.autostart_enabled) {
+                    if ui.checkbox(&mut self.autostart_enabled, "Enable Autostart").changed()
+                        && let Err(e) = crate::autostart::set_autostart(self.autostart_enabled) {
                             eprintln!("Failed to update autostart setting: {}", e);
                             // Revert on failure
                             self.autostart_enabled = !self.autostart_enabled;
                         }
-                    }
                     ui.end_row();
 
                     ui.label("Poll Interval (ms):");
-                    ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000));
+                    if ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000)).changed() {
+                        self.config_dirty = true;
+                    }
                     ui.end_row();
 
                     ui.label("Ping Interval (ms):");
-                    ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000));
+                    if ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000)).changed() {
+                        self.config_dirty = true;
+                    }
                     ui.end_row();
                 });
 
@@ -216,6 +221,7 @@ impl eframe::App for TeamsBridgeApp {
             if ui.add(slider).changed() {
                 let new_brightness = (brightness_slider_val as f32 * 255.0 / 100.0).round() as u8;
                 self.local_config.brightness = new_brightness;
+                self.config_dirty = true;
                 // Live preview: immediately push brightness to shared config
                 // so the bridge loop picks it up and sends to ESP
                 self.config.lock().unwrap().brightness = new_brightness;
@@ -229,6 +235,7 @@ impl eframe::App for TeamsBridgeApp {
             if ui.add(transition_slider).changed() {
                 let new_transition = transition_val as u16;
                 self.local_config.transition_duration_ms = new_transition;
+                self.config_dirty = true;
                 self.config.lock().unwrap().transition_duration_ms = new_transition;
             }
 
@@ -250,7 +257,9 @@ impl eframe::App for TeamsBridgeApp {
                             ui.label(format!("{}:", key));
                             if let Some(cmd) = self.local_config.presence_map.get_mut(&key) {
                                 ui.horizontal(|ui| {
-                                    render_color_command(ui, cmd, &key);
+                                    if render_color_command(ui, cmd, &key) {
+                                        self.config_dirty = true;
+                                    }
                                 });
                             }
                             ui.end_row();
@@ -266,19 +275,32 @@ impl eframe::App for TeamsBridgeApp {
                 .show(ui, |ui| {
                     ui.label("Watchdog:");
                     ui.horizontal(|ui| {
-                        render_color_command(ui, &mut self.local_config.watchdog, "watchdog");
+                        if render_color_command(ui, &mut self.local_config.watchdog, "watchdog") {
+                            self.config_dirty = true;
+                        }
                     });
                     ui.end_row();
                 });
 
             ui.add_space(20.0);
-            if ui.button("Save Configuration").clicked() {
+            let save_label = if self.config_dirty {
+                "Save Configuration *"
+            } else {
+                "Save Configuration"
+            };
+
+            if ui.button(save_label).clicked() {
                 if let Err(e) = crate::config::save_config(&self.config_path, &self.local_config) {
                     eprintln!("Failed to save config: {}", e);
                 } else {
                     // Update shared config
                     *self.config.lock().unwrap() = self.local_config.clone();
+                    self.config_dirty = false;
                 }
+            }
+
+            if self.config_dirty {
+                ui.label("Unsaved configuration changes");
             }
         });
 
@@ -292,19 +314,23 @@ impl eframe::App for TeamsBridgeApp {
     }
 }
 
-fn render_color_command(ui: &mut egui::Ui, cmd: &mut ColorCommand, id_salt: &str) {
+fn render_color_command(ui: &mut egui::Ui, cmd: &mut ColorCommand, id_salt: &str) -> bool {
+    let mut changed = false;
+
     egui::ComboBox::from_id_salt(format!("cmd_{}", id_salt))
         .selected_text(&cmd.command)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut cmd.command, "OFF".to_string(), "OFF");
-            ui.selectable_value(&mut cmd.command, "SOLID".to_string(), "SOLID");
-            ui.selectable_value(&mut cmd.command, "BREATHE".to_string(), "BREATHE");
-            ui.selectable_value(&mut cmd.command, "BREATHE_SLOW".to_string(), "BREATHE_SLOW");
+            changed |= ui.selectable_value(&mut cmd.command, "OFF".to_string(), "OFF").changed();
+            changed |= ui.selectable_value(&mut cmd.command, "SOLID".to_string(), "SOLID").changed();
+            changed |= ui.selectable_value(&mut cmd.command, "BREATHE".to_string(), "BREATHE").changed();
+            changed |= ui.selectable_value(&mut cmd.command, "BREATHE_SLOW".to_string(), "BREATHE_SLOW").changed();
         });
 
     let mut color = [cmd.r, cmd.g, cmd.b];
-    ui.color_edit_button_srgb(&mut color);
+    changed |= ui.color_edit_button_srgb(&mut color).changed();
     cmd.r = color[0];
     cmd.g = color[1];
     cmd.b = color[2];
+
+    changed
 }

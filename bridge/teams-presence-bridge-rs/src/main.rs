@@ -1,4 +1,4 @@
-//#![windows_subsystem = "windows"] // Hides the console window on Windows
+//#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
 mod config;
@@ -11,6 +11,7 @@ mod update_ui;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
@@ -35,13 +36,29 @@ fn main() -> eframe::Result<()> {
     let config_path = exe_dir.join("config.json");
     let config_path_str = config_path.to_string_lossy().to_string();
 
-    let config = match load_config(&config_path_str) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to load config from {}, generating default: {}", config_path_str, e);
-            let default_config = Config::default();
-            let _ = config::save_config(&config_path_str, &default_config);
-            default_config
+    let config = if !config_path.exists() {
+        let default_config = Config::default();
+        if let Err(e) = config::save_config(&config_path_str, &default_config) {
+            eprintln!("Failed to create default config at {}: {}", config_path_str, e);
+        }
+        default_config
+    } else {
+        match load_config(&config_path_str) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to parse config from {}: {}", config_path_str, e);
+                let backup_path = exe_dir.join("config.json.bak");
+                match fs::rename(&config_path, &backup_path) {
+                    Ok(_) => eprintln!("Backed up invalid config to {}", backup_path.to_string_lossy()),
+                    Err(rename_err) => eprintln!("Failed to back up invalid config to {}: {}", backup_path.to_string_lossy(), rename_err),
+                }
+
+                let default_config = Config::default();
+                if let Err(save_err) = config::save_config(&config_path_str, &default_config) {
+                    eprintln!("Failed to write default config after parse error: {}", save_err);
+                }
+                default_config
+            }
         }
     };
 
@@ -162,7 +179,8 @@ fn run_bridge_loop(
     flash_pause_flag: Arc<AtomicBool>,
     bootloader_trigger: Arc<AtomicBool>,
 ) {
-    let mut hid_manager = HidManager::new();
+    let mut hid_manager: Option<HidManager> = None;
+    let mut last_hid_init_attempt = Instant::now() - Duration::from_secs(5);
     let mut teams_client = TeamsClient::new();
     
     let mut previous_presence: Option<String> = None;
@@ -171,9 +189,22 @@ fn run_bridge_loop(
     let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
     let mut last_sent_transition: Option<u16> = None; // Track to detect live slider changes
 
-    hid_manager.connect();
-
     loop {
+        let now = Instant::now();
+
+        if hid_manager.is_none() && now.duration_since(last_hid_init_attempt) >= Duration::from_secs(5) {
+            last_hid_init_attempt = now;
+            match HidManager::new() {
+                Ok(mut manager) => {
+                    let _ = manager.connect();
+                    hid_manager = Some(manager);
+                }
+                Err(e) => {
+                    eprintln!("[Bridge] HID init failed, will retry: {}", e);
+                }
+            }
+        }
+
         // Pause during firmware flash
         if flash_pause_flag.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
@@ -182,9 +213,11 @@ fn run_bridge_loop(
 
         // Check if we need to put the device into bootloader mode
         if bootloader_trigger.load(Ordering::Relaxed) {
-            if hid_manager.is_connected() {
+            if hid_manager.as_ref().is_some_and(|h| h.is_connected()) {
                 eprintln!("[Bridge] Entering bootloader mode as requested...");
-                hid_manager.enter_bootloader();
+                if let Some(h) = hid_manager.as_mut() {
+                    h.enter_bootloader();
+                }
             }
             bootloader_trigger.store(false, Ordering::Relaxed);
             flash_pause_flag.store(true, Ordering::Relaxed);
@@ -194,7 +227,9 @@ fn run_bridge_loop(
         }
         // Fast tick for shutdown and UI responsiveness
         if shutdown_flag.load(Ordering::Relaxed) {
-            hid_manager.send_color_command(0x02, 0, 0, 0); // CMD_OFF
+            if let Some(h) = hid_manager.as_mut() {
+                h.send_color_command(0x02, 0, 0, 0); // CMD_OFF
+            }
             break;
         }
 
@@ -203,73 +238,85 @@ fn run_bridge_loop(
             (c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness, c.transition_duration_ms)
         };
 
-        let now = Instant::now();
-
         // 1. Slow tick: Teams polling and Serial reconnection
         if now.duration_since(last_poll_time).as_millis() as u64 >= poll_interval {
             last_poll_time = now;
 
             // Try reconnect if disconnected
-            let was_disconnected = !hid_manager.is_connected();
-            if was_disconnected {
-                hid_manager.connect();
-                // On fresh connection, send brightness and force re-send of current presence
-                if hid_manager.is_connected() {
-                    hid_manager.send_brightness(brightness);
-                    last_sent_brightness = Some(brightness);
-                    hid_manager.send_transition(transition_duration_ms);
-                    last_sent_transition = Some(transition_duration_ms);
-                    previous_presence = None; // Force re-send of presence color
-                }
-            }
-
-            // Query version if we are connected but don't have it yet
-            if hid_manager.is_connected() {
-                let has_version = status.lock().unwrap().firmware_version.is_some();
-                if !has_version {
-                    if let Some(ver) = hid_manager.query_firmware_version() {
-                        eprintln!("[Bridge] Queried firmware version: v{}.{}.{} (variant: {})", ver.0, ver.1, ver.2, ver.3);
-                        status.lock().unwrap().firmware_version = Some(ver);
+            if let Some(h) = hid_manager.as_mut() {
+                let was_disconnected = !h.is_connected();
+                if was_disconnected {
+                    h.connect();
+                    // On fresh connection, send brightness and force re-send of current presence
+                    if h.is_connected() {
+                        h.send_brightness(brightness);
+                        last_sent_brightness = Some(brightness);
+                        h.send_transition(transition_duration_ms);
+                        last_sent_transition = Some(transition_duration_ms);
+                        previous_presence = None; // Force re-send of presence color
                     }
                 }
             }
 
+            // Query version if we are connected but don't have it yet
+            if let Some(h) = hid_manager.as_mut()
+                && h.is_connected() {
+                    let has_version = status.lock().unwrap().firmware_version.is_some();
+                    if !has_version
+                        && let Some(ver) = h.query_firmware_version() {
+                            eprintln!("[Bridge] Queried firmware version: v{}.{}.{} (variant: {})", ver.0, ver.1, ver.2, ver.3);
+                            status.lock().unwrap().firmware_version = Some(ver);
+                        }
+                }
+
             let presence = teams_client.get_presence();
             if presence != previous_presence {
                 if let Some(p) = &presence {
+                    eprintln!("[Bridge] Presence changed to: {}", p);
                     let cmd_params = if let Some(c) = presence_map.get(p) {
+                        eprintln!("[Bridge] Found mapped color for {}: {:?}", p, c);
                         c.to_hid_params()
+                    } else if let Some(unknown) = presence_map.get("Unknown") {
+                        eprintln!("[Bridge] Unknown presence '{}' not in presence_map, using 'Unknown' mapping", p);
+                        unknown.to_hid_params()
                     } else {
-                        eprintln!("[Bridge] Unknown presence '{}' not in presence_map, sending watchdog command", p);
+                        eprintln!("[Bridge] Unknown presence '{}' and no 'Unknown' mapping found, sending watchdog command", p);
                         watchdog.to_hid_params()
                     };
-                    hid_manager.send_color_command(cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
+                    if let Some(h) = hid_manager.as_mut() {
+                        eprintln!("[Bridge] Sending HID Color Command -> CMD: {}, R: {}, G: {}, B: {}", cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
+                        h.send_color_command(cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
+                    }
                     last_ping_time = Instant::now(); // Presence command proves host is alive
+                } else {
+                    eprintln!("[Bridge] Presence changed to: None (Teams not running or no status detected)");
                 }
                 previous_presence = presence.clone();
             }
         }
 
         // 2. Fast tick updates: Live brightness update from UI
-        if hid_manager.is_connected() {
-            if last_sent_brightness != Some(brightness) {
-                hid_manager.send_brightness(brightness);
-                last_sent_brightness = Some(brightness);
+        if let Some(h) = hid_manager.as_mut()
+            && h.is_connected() {
+                if last_sent_brightness != Some(brightness) {
+                    h.send_brightness(brightness);
+                    last_sent_brightness = Some(brightness);
+                }
+                if last_sent_transition != Some(transition_duration_ms) {
+                    h.send_transition(transition_duration_ms);
+                    last_sent_transition = Some(transition_duration_ms);
+                }
             }
-            if last_sent_transition != Some(transition_duration_ms) {
-                hid_manager.send_transition(transition_duration_ms);
-                last_sent_transition = Some(transition_duration_ms);
-            }
-        }
 
         // 3. Ping tick
-        if hid_manager.is_connected() && now.duration_since(last_ping_time).as_millis() as u64 >= ping_interval {
-            hid_manager.send_ping();
-            last_ping_time = Instant::now();
-        }
+        if let Some(h) = hid_manager.as_mut()
+            && h.is_connected() && now.duration_since(last_ping_time).as_millis() as u64 >= ping_interval {
+                h.send_ping();
+                last_ping_time = Instant::now();
+            }
 
         // 4. Update UI Status
-        let connected = hid_manager.is_connected();
+        let connected = hid_manager.as_ref().is_some_and(|h| h.is_connected());
         let parsing = teams_client.has_valid_log();
 
         let mut status_changed = false;
@@ -284,11 +331,10 @@ fn run_bridge_loop(
                 status_changed = true;
             }
         }
-        if status_changed {
-            if let Some(ctx) = ctx.lock().unwrap().as_ref() {
+        if status_changed
+            && let Some(ctx) = ctx.lock().unwrap().as_ref() {
                 ctx.request_repaint();
             }
-        }
 
         thread::sleep(Duration::from_millis(100));
     }

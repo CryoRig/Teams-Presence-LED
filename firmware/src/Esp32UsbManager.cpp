@@ -3,25 +3,49 @@
 
 Esp32UsbManager* Esp32UsbManager::instance = nullptr;
 
+void CustomUSBHIDVendor::_onOutput(uint8_t report_id, const uint8_t* buffer, uint16_t len) {
+    // If len == 6, TinyUSB did not strip the Report ID. If len == 5, it did.
+    // We check if the first byte is the Report ID (0x06).
+    uint8_t offset = (len >= 6 && buffer[0] == 0x06) ? 1 : 0;
+    
+    // We need at least 4 bytes of payload (cmd, p1, p2, p3)
+    if (len >= offset + 4) {
+        HidCommand cmd;
+        cmd.cmd = buffer[offset];
+        cmd.p1 = buffer[offset + 1];
+        cmd.p2 = buffer[offset + 2];
+        cmd.p3 = buffer[offset + 3];
+        
+        if (Esp32UsbManager::instance && Esp32UsbManager::instance->cmdQueue) {
+            // Push directly to our thread-safe queue. This completely bypasses
+            // TinyUSB's rx_queue and avoids the ephemeral pointer bugs of the esp_event system.
+            xQueueSendFromISR(Esp32UsbManager::instance->cmdQueue, &cmd, NULL);
+        }
+    }
+}
+
 Esp32UsbManager::Esp32UsbManager() : vendor(5) {
     instance = this;
+    // 20 commands should be more than enough to handle rapid burst of commands
+    cmdQueue = xQueueCreate(20, sizeof(HidCommand));
 }
 
 Esp32UsbManager::~Esp32UsbManager() {
     instance = nullptr;
+    if (cmdQueue) {
+        vQueueDelete(cmdQueue);
+    }
 }
 
 void Esp32UsbManager::begin(UsbCommandCallback callback) {
     cmdCallback = callback;
-    vendor.onEvent(vendorEventCb);
     vendor.begin();
-    // Use the compiler defines from platformio.ini for manufacturer/product
-    // If you need to set VID/PID explicitly on ESP32, it's done via build flags,
-    // but we can also set it if the API allows. For ESP32 Arduino Core 2.x/3.x,
-    // USB VID/PID is usually set by build flags (e.g., -D USB_VID=0x1209).
     USB.productName(USB_PRODUCT);
     USB.manufacturerName(USB_MANUFACTURER);
-    // USB.VID(0x1209); USB.PID(0x0005); // Usually set by build_flags
+    #if defined(USB_VID) && defined(USB_PID)
+    USB.VID(USB_VID);
+    USB.PID(USB_PID);
+    #endif
     USB.begin();
 }
 
@@ -31,21 +55,16 @@ void Esp32UsbManager::sendVersion(uint8_t major, uint8_t minor, uint8_t patch, u
 }
 
 void Esp32UsbManager::sendResponse(uint8_t status, uint8_t value) {
-    uint8_t response[2] = {status, value};
+    uint8_t response[5] = {status, value, 0, 0, 0};
     vendor.write(response, sizeof(response));
 }
 
 void Esp32UsbManager::loop() {
-    // Nothing to do for ESP32, uses event callbacks
-}
-
-void Esp32UsbManager::vendorEventCb(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
-    if (event_base == ARDUINO_USB_HID_VENDOR_EVENTS && event_id == ARDUINO_USB_HID_VENDOR_OUTPUT_EVENT) {
-        arduino_usb_hid_vendor_event_data_t* p = (arduino_usb_hid_vendor_event_data_t*)event_data;
-        if (p->len < 4) return;
-
-        if (instance && instance->cmdCallback) {
-            instance->cmdCallback(p->buffer[0], p->buffer[1], p->buffer[2], p->buffer[3]);
+    HidCommand cmd;
+    // Read from our safe queue and dispatch
+    while (cmdQueue && xQueueReceive(cmdQueue, &cmd, 0) == pdTRUE) {
+        if (cmdCallback) {
+            cmdCallback(cmd.cmd, cmd.p1, cmd.p2, cmd.p3);
         }
     }
 }

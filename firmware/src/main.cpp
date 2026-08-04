@@ -15,8 +15,8 @@ IUsbManager* usbManager = nullptr;
 
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 4
-#define FW_VERSION_PATCH 4
+#define FW_VERSION_MINOR 5
+#define FW_VERSION_PATCH 0
 
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
@@ -45,6 +45,8 @@ enum State {
 State currentState = STATE_OFF;
 CRGB targetColor = CRGB::Black;
 CRGB lastHardwareColor = CRGB::Black;
+State lastCommandedState = STATE_OFF;
+CRGB lastCommandedColor = CRGB::Black;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
 float breatheAngle = 0.0f;
@@ -107,9 +109,11 @@ void bootAnimation() {
         FastLED.show();
         delay(10);
     }
+    FastLED.setBrightness(0);
+    FastLED.show();
     // Restore full brightness and clear
     FastLED.setBrightness(BRIGHTNESS);
-    showSolid(CRGB::Black);
+    showSolid(CRGB::Black, true);
 }
 
 // --- HID Callback ---
@@ -121,31 +125,40 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
             response[0] = 0x01; // PONG
             if (currentState == STATE_DISCONNECTED) {
                 startStateTransition();
-                currentState = STATE_OFF;
+                currentState = lastCommandedState;
+                targetColor = lastCommandedColor;
             }
             lastHeartbeat = millis();
             break;
         case 0x02: // OFF
             startStateTransition();
             currentState = STATE_OFF;
+            lastCommandedState = STATE_OFF;
+            lastCommandedColor = CRGB::Black;
             lastHeartbeat = millis();
             break;
         case 0x03: // SOLID
             startStateTransition();
             targetColor = CRGB(p1, p2, p3);
             currentState = STATE_SOLID;
+            lastCommandedState = STATE_SOLID;
+            lastCommandedColor = targetColor;
             lastHeartbeat = millis();
             break;
         case 0x04: // BREATHE
             startStateTransition();
             targetColor = CRGB(p1, p2, p3);
             currentState = STATE_BREATHE;
+            lastCommandedState = STATE_BREATHE;
+            lastCommandedColor = targetColor;
             lastHeartbeat = millis();
             break;
         case 0x05: // BREATHE_SLOW
             startStateTransition();
             targetColor = CRGB(p1, p2, p3);
             currentState = STATE_BREATHE_SLOW;
+            lastCommandedState = STATE_BREATHE_SLOW;
+            lastCommandedColor = targetColor;
             lastHeartbeat = millis();
             break;
         case 0x06: // BRIGHTNESS
@@ -202,7 +215,7 @@ void setup() {
 
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 500mA for USB safety
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 480mA for USB safety (note: full white will be dimmed by FastLED to meet this budget)
     FastLED.setBrightness(BRIGHTNESS);
     showSolid(CRGB::Black);
 
@@ -212,6 +225,10 @@ void setup() {
 }
 
 void loop() {
+    if (usbManager) {
+        usbManager->loop();
+    }
+
     unsigned long now = millis();
 
     // 2. Watchdog Check — any command resets the timer

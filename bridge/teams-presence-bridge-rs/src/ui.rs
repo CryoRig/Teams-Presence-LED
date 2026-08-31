@@ -37,16 +37,18 @@ impl TeamsBridgeApp {
         let local_config = config.lock().unwrap().clone();
 
         let tray_menu = tray_icon::menu::Menu::new();
-        let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "🔴 ESP32: Disconnected", true, None);
-        let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "🔴 Teams: Log Not Found", true, None);
+        let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "ESP32: Disconnected", false, None);
+        let teams_status_item = tray_icon::menu::MenuItem::with_id("teams_status", "Teams: Log Not Found", false, None);
         let update_item = tray_icon::menu::MenuItem::with_id("updates", "Check for Updates", true, None);
         let quit_i = tray_icon::menu::MenuItem::with_id("quit", "Quit", true, None);
         let _ = tray_menu.append_items(&[
             &esp_status_item,
             &teams_status_item,
             &tray_icon::menu::PredefinedMenuItem::separator(),
-            &update_item,
-            &tray_icon::menu::PredefinedMenuItem::separator(),
+            // TODO: The update menu was temporarily hidden by request because it's
+            // currently not useful. Uncomment the lines below to reactivate it.
+            // &update_item,
+            // &tray_icon::menu::PredefinedMenuItem::separator(),
             &quit_i,
         ]);
 

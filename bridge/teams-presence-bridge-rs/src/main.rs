@@ -33,6 +33,24 @@ fn main() -> eframe::Result<()> {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
+    let lock_path = exe_dir.join(".bridge.lock");
+    let mut open_opts = fs::OpenOptions::new();
+    open_opts.write(true).create(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        open_opts.share_mode(0); // Exclusive lock on Windows
+    }
+
+    let _single_instance_lock = match open_opts.open(&lock_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[Bridge] Another instance of Teams Presence Bridge is ALREADY running in the background/system tray! ({})", e);
+            eprintln!("[Bridge] To reopen the settings window, click the Teams icon in your Windows System Tray (bottom right near clock).");
+            return Ok(());
+        }
+    };
+
     let config_path = exe_dir.join("config.json");
     let config_path_str = config_path.to_string_lossy().to_string();
 
@@ -196,7 +214,19 @@ fn run_bridge_loop(
             last_hid_init_attempt = now;
             match HidManager::new() {
                 Ok(mut manager) => {
-                    let _ = manager.connect();
+                    let connected = manager.connect();
+                    if connected {
+                        let c = config.lock().unwrap();
+                        manager.send_brightness(c.brightness);
+                        last_sent_brightness = Some(c.brightness);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        
+                        manager.send_transition(c.transition_duration_ms);
+                        last_sent_transition = Some(c.transition_duration_ms);
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        
+                        previous_presence = None; // Force re-send of presence color
+                    }
                     hid_manager = Some(manager);
                 }
                 Err(e) => {
@@ -242,19 +272,11 @@ fn run_bridge_loop(
         if now.duration_since(last_poll_time).as_millis() as u64 >= poll_interval {
             last_poll_time = now;
 
-            // Try reconnect if disconnected
-            if let Some(h) = hid_manager.as_mut() {
-                let was_disconnected = !h.is_connected();
-                if was_disconnected {
-                    h.connect();
-                    // On fresh connection, send brightness and force re-send of current presence
-                    if h.is_connected() {
-                        h.send_brightness(brightness);
-                        last_sent_brightness = Some(brightness);
-                        h.send_transition(transition_duration_ms);
-                        last_sent_transition = Some(transition_duration_ms);
-                        previous_presence = None; // Force re-send of presence color
-                    }
+            // If not connected, drop context and retry next tick
+            if let Some(h) = hid_manager.as_ref() {
+                if !h.is_connected() {
+                    hid_manager = None;
+                    continue;
                 }
             }
 

@@ -44,7 +44,6 @@ impl HidManager {
             if info.usage_page() == USAGE_PAGE && info.vendor_id() == TARGET_VID && info.product_id() == TARGET_PID {
                 match info.open_device(&self.api) {
                     Ok(dev) => {
-                        dev.set_blocking_mode(false).ok();
                         self.device = Some(dev);
                         self.missing_device_logged = false;
                         eprintln!("[HidManager] Connected to HID device (VID: {:04X}, PID: {:04X})", info.vendor_id(), info.product_id());
@@ -72,7 +71,7 @@ impl HidManager {
             // First byte is report ID (must match HID_REPORT_ID_VENDOR = 6)
             let buf = [HID_REPORT_ID_VENDOR, cmd, p1, p2, p3, p4];
             if let Err(e) = dev.write(&buf) {
-                eprintln!("[HidManager] Write error: {}", e);
+                eprintln!("[HidManager] Write error on OUT endpoint: {}", e);
                 self.device = None;
             }
         }

@@ -5,8 +5,6 @@ use espflash::flasher::Flasher;
 use espflash::target::ProgressCallbacks;
 use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
 use serialport::{available_ports, SerialPortType, UsbPortInfo};
-use sysinfo::Disks;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlashStage {
     Connecting,
@@ -156,64 +154,3 @@ pub fn flash_firmware_esp32(
     Ok(())
 }
 
-pub fn flash_firmware_uf2(
-    firmware_path: &Path,
-    progress_cb: impl Fn(FlashStage) + Send + 'static,
-) -> Result<(), Box<dyn Error>> {
-    progress_cb(FlashStage::Connecting);
-    
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let mut target_drive = None;
-    
-    eprintln!("[Flasher] Waiting for UF2 bootloader drive...");
-    while std::time::Instant::now() < deadline {
-        let disks = Disks::new_with_refreshed_list();
-        for disk in disks.list() {
-            if disk.is_removable() {
-                let mount_point = disk.mount_point();
-                let info_file = mount_point.join("INFO_UF2.TXT");
-                if info_file.exists()
-                    && let Ok(info_contents) = std::fs::read_to_string(&info_file)
-                        && (info_contents.contains("Board-ID: RP2350") || info_contents.contains("RP2350")) {
-                            target_drive = Some(mount_point.to_path_buf());
-                            break;
-                        }
-            }
-        }
-        if target_drive.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    
-    let drive_path = match target_drive {
-        Some(p) => p,
-        None => return Err("RP2350 UF2 bootloader drive not found after 20 s. Is the device connected and in bootloader mode?".into()),
-    };
-    
-    eprintln!("[Flasher] Found UF2 drive at: {:?}", drive_path);
-    progress_cb(FlashStage::Flashing { percent: 0 });
-    
-    let dest_path = drive_path.join("firmware.uf2");
-    std::fs::copy(firmware_path, &dest_path)?;
-    
-    progress_cb(FlashStage::Flashing { percent: 100 });
-    progress_cb(FlashStage::Resetting);
-    
-    // Wait for the drive to disappear (indicates successful flash and reboot)
-    let reboot_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < reboot_deadline {
-        let disks = Disks::new_with_refreshed_list();
-        let still_mounted = disks.list().iter().any(|d| d.mount_point() == drive_path);
-        if !still_mounted {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    }
-    
-    progress_cb(FlashStage::Done);
-    
-    let _ = std::fs::remove_file(firmware_path);
-    
-    Ok(())
-}

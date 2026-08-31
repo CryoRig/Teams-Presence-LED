@@ -28,7 +28,6 @@ pub struct ReleaseInfo {
     pub version: Version,
     pub firmware_version: Version,
     pub firmware_download_url_esp32: Option<String>,
-    pub firmware_download_url_rp2350: Option<String>,
     pub firmware_sha256sums_url: Option<String>,
     pub html_url: String,
 }
@@ -77,15 +76,12 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
     let version = parse_tag_to_semver(&response.tag_name)?;
 
     let mut firmware_download_url_esp32 = None;
-    let mut firmware_download_url_rp2350 = None;
     let mut firmware_sha256sums_url = None;
     let mut manifest_url = None;
 
     for asset in response.assets {
         if asset.name == "seeed_xiao_esp32s3.bin" || asset.name == "firmware.bin" {
             firmware_download_url_esp32 = Some(asset.browser_download_url);
-        } else if asset.name == "rpipico2.uf2" || asset.name == "firmware.uf2" {
-            firmware_download_url_rp2350 = Some(asset.browser_download_url);
         } else if asset.name.eq_ignore_ascii_case("SHA256SUMS") || asset.name.ends_with(".sha256") {
             firmware_sha256sums_url = Some(asset.browser_download_url);
         } else if asset.name == "manifest.json" {
@@ -108,7 +104,6 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
         version: br_ver,
         firmware_version: fw_ver,
         firmware_download_url_esp32,
-        firmware_download_url_rp2350,
         firmware_sha256sums_url,
         html_url: response.html_url,
     })

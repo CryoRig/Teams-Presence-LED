@@ -117,7 +117,6 @@ pub fn render(
                     if let Some(ref latest) = s.latest_release {
                         let has_fw_url = match &s.firmware_current {
                             Some((_, 1)) => latest.firmware_download_url_esp32.is_some(),
-                            Some((_, 2)) => latest.firmware_download_url_rp2350.is_some(),
                             _ => false,
                         };
                         if has_fw_url {
@@ -256,7 +255,6 @@ fn start_firmware_update(
 
     let (firmware_url, sha256sums_url) = match (latest_release, variant) {
         (Some(r), Some(1)) => (r.firmware_download_url_esp32, r.firmware_sha256sums_url),
-        (Some(r), Some(2)) => (r.firmware_download_url_rp2350, r.firmware_sha256sums_url),
         _ => (None, None),
     };
 
@@ -330,24 +328,11 @@ fn start_firmware_update(
         let state_cb = state_clone.clone();
         let ctx_cb = ctx_clone.clone();
         
-        let variant = {
-            let s = state_clone.lock().unwrap();
-            s.firmware_current.as_ref().map(|(_, v)| *v).unwrap()
-        };
-
-        let flash_res = if variant == 1 {
-            crate::flasher::flash_firmware_esp32(&fw_path, move |stage| {
-                let mut s = state_cb.lock().unwrap();
-                s.flash_stage = Some(stage);
-                ctx_cb.request_repaint();
-            })
-        } else {
-            crate::flasher::flash_firmware_uf2(&fw_path, move |stage| {
-                let mut s = state_cb.lock().unwrap();
-                s.flash_stage = Some(stage);
-                ctx_cb.request_repaint();
-            })
-        };
+        let flash_res = crate::flasher::flash_firmware_esp32(&fw_path, move |stage| {
+            let mut s = state_cb.lock().unwrap();
+            s.flash_stage = Some(stage);
+            ctx_cb.request_repaint();
+        });
 
         match flash_res {
             Ok(_) => {

@@ -6,8 +6,6 @@
 #ifdef ARDUINO_ARCH_ESP32
 #include "Esp32UsbManager.h"
 #include <soc/rtc_cntl_reg.h>
-#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
-#include "PicoUsbManager.h"
 #endif
 
 IUsbManager* usbManager = nullptr;
@@ -174,16 +172,12 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
         case 0x08: // RESET
 #if defined(ARDUINO_ARCH_ESP32)
             ESP.restart();
-#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
-            rp2040.restart();
 #endif
             break;
         case 0x09: // BOOTLOADER
 #if defined(ARDUINO_ARCH_ESP32)
             REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
             ESP.restart();
-#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
-            rp2040.rebootToBootloader();
 #endif
             break;
         case 0x0A: // VERSION
@@ -204,8 +198,6 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
 void setup() {
 #ifdef ARDUINO_ARCH_ESP32
     usbManager = new Esp32UsbManager();
-#elif defined(ARDUINO_ARCH_RP2040) || defined(ARDUINO_ARCH_RP2350)
-    usbManager = new PicoUsbManager();
 #endif
 
     if (usbManager) {

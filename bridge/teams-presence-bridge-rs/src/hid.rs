@@ -39,18 +39,24 @@ impl HidManager {
         // Refresh device list
         let _ = self.api.refresh_devices();
 
-        // Find device by usage page and VID/PID
+        // Find device by usage page and VID/PID or product name
         for info in self.api.device_list() {
-            if info.usage_page() == USAGE_PAGE && info.vendor_id() == TARGET_VID && info.product_id() == TARGET_PID {
-                match info.open_device(&self.api) {
-                    Ok(dev) => {
-                        self.device = Some(dev);
-                        self.missing_device_logged = false;
-                        eprintln!("[HidManager] Connected to HID device (VID: {:04X}, PID: {:04X})", info.vendor_id(), info.product_id());
-                        return true;
-                    }
-                    Err(e) => {
-                        eprintln!("[HidManager] Failed to open: {}", e);
+            if info.usage_page() == USAGE_PAGE {
+                let is_target_vid_pid = info.vendor_id() == TARGET_VID && info.product_id() == TARGET_PID;
+                let is_xiao = info.vendor_id() == 0x2886 && info.product_id() == 0x0056;
+                let is_product_match = info.product_string().is_some_and(|s| s.contains("Teams Presence Bridge"));
+                
+                if is_target_vid_pid || is_xiao || is_product_match {
+                    match info.open_device(&self.api) {
+                        Ok(dev) => {
+                            self.device = Some(dev);
+                            self.missing_device_logged = false;
+                            eprintln!("[HidManager] Connected to HID device (VID: {:04X}, PID: {:04X})", info.vendor_id(), info.product_id());
+                            return true;
+                        }
+                        Err(e) => {
+                            eprintln!("[HidManager] Failed to open: {}", e);
+                        }
                     }
                 }
             }

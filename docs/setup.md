@@ -7,14 +7,15 @@ This guide covers the one-time setup required to build and debug both the firmwa
 | Tool | Version | Purpose |
 |------|---------|---------|
 | [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
-| [Rust](https://rustup.rs/) | 1.92+ (or stable) | Bridge application & diagnostic tools |
+| [Rust](https://www.rust-lang.org/) | 1.85+ (2024 edition) | Bridge application and diagnostics |
 
 ## Board
 
-This project uses the **Seeed XIAO ESP32-S3**. It has a built-in USB-C connector that exposes both a CDC-ACM serial port and a JTAG debug interface over a single cable — no external FTDI or CH340 chip is needed.
+This project uses the **Seeed XIAO ESP32-S3**. It has a built-in USB-C connector that exposes both a CDC-ACM serial port (for debug logging) and a custom USB HID interface (VID `0x1209`, PID `0x0005`, Usage Page `0xFF00`) for communication with the bridge — no external FTDI or CH340 chip is needed.
 
 - Product page: [Seeed XIAO ESP32-S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - Upload protocol: `esptool` (via the built-in USB)
+- Framework: Arduino (via [pioarduino](https://github.com/pioarduino/platform-espressif32.git))
 
 ## Windows USB Driver (One-Time)
 
@@ -42,6 +43,8 @@ cd firmware
 pio run --target upload
 ```
 
+> **Note:** On the XIAO ESP32-S3 via native USB, the board may not reset automatically after flashing even if the output says "Hard resetting via RTS pin...". If the new firmware does not start, unplug and re-plug the USB cable.
+
 ### Serial Monitor
 
 ```bash
@@ -49,7 +52,7 @@ cd firmware
 pio device monitor
 ```
 
-The monitor is configured with `send_on_enter` filter, local echo, and LF line endings to match the serial protocol.
+The monitor is configured with `send_on_enter` filter, local echo, and LF line endings to view debug logs at 115200 baud.
 
 ### Debugging
 
@@ -59,36 +62,44 @@ The PlatformIO debugger uses `esp-builtin` (on-chip JTAG via OpenOCD). To start 
 2. Set a breakpoint in `setup()` or `loop()`
 3. Press F5 or use the PlatformIO Debug sidebar
 
-## Diagnostic Tools
+## Diagnostic Tool
 
-A diagnostic tool is provided to list all HID devices visible to the system and confirm the ESP32 is correctly enumerated.
-
-Run the diagnostic tool from the bridge directory:
+The bridge includes a standalone diagnostic tool to verify device enumeration via HID:
 
 ```bash
 cd bridge/teams-presence-bridge-rs
-cargo run --release --bin hid_diag
+cargo run --bin hid_diag
 ```
 
-## Bridge Setup
+This scans for connected HID devices and verifies that a device matching Usage Page `0xFF00` is detected.
 
-1. Make sure you have Rust and Cargo installed.
-2. In a terminal, navigate to the `bridge/teams-presence-bridge-rs` directory.
-3. Run the application:
-   ```bash
-   cargo run --release
-   ```
-4. The application will start in the system tray. It will automatically detect the ESP32 via USB HID and connect.
+## Bridge Application
 
-## Testing
+### Run in Development Mode
 
-You can use the system tray menu to view connection status. You can no longer send raw commands like `SOLID:255,0,0` through the serial monitor, as the device now expects binary HID reports. The serial monitor (115200 baud) is only used for `HELP`, `RESET`, and debug logging.
+```bash
+cd bridge/teams-presence-bridge-rs
+cargo run
+```
+
+### Build Release Binary
+
+```bash
+cd bridge/teams-presence-bridge-rs
+cargo build --release
+```
+
+The binary will be generated at `bridge/teams-presence-bridge-rs/target/release/TeamsPresenceBridge.exe`.
+
+The bridge automatically detects and connects to the ESP32-S3 via USB HID (VID: `0x1209`, PID: `0x0005`). It reads settings and presence-to-command mappings from `config.json` (such as colors, animations, brightness, poll interval, and transition durations) and displays a Windows system tray icon with an `egui` settings window.
 
 ## Verification Checklist
 
-Before integrating firmware and bridge, confirm:
+Before full system use, confirm:
 
-- [ ] The XIAO ESP32-S3 appears as a COM port (for debug logging) AND as a USB Input Device (HID) in Device Manager
-- [ ] `pio run --target upload` flashes successfully and `Serial.println("BOOT")` appears in `pio device monitor`
-- [ ] The Rust diagnostic tool `hid_diag` lists the device under usage page `0xFF00`
-- [ ] The PlatformIO debugger attaches with `debug_tool = esp-builtin` and breakpoints work
+- [ ] The XIAO ESP32-S3 appears as a COM port in Device Manager (for flashing) and enumerates as a USB HID device
+- [ ] `pio run --target upload` flashes successfully (re-plug USB if manual reset is needed)
+- [ ] The LEDs run their rainbow boot animation upon startup
+- [ ] `cargo run --bin hid_diag` discovers the HID device with Usage Page `0xFF00`
+- [ ] `cargo run` launches the bridge, shows the tray icon, and synchronizes your Microsoft Teams presence state to the LEDs
+

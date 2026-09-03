@@ -21,5 +21,4 @@ This project consists of two parts:
 
 ## Documentation
 
-- [Protocol Specification](docs/protocol.md) - Details the serial commands used for communication between the bridge and firmware.
-- [Development Setup](docs/setup.md) - Instructions for building the firmware and running the bridge application.
+- [Protocol Specification](docs/protocol.md) - Details the USB HID binary protocol used for communication between the bridge and firmware.

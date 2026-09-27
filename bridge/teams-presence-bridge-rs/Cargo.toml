@@ -1,7 +1,12 @@
 [package]
 name = "teams-presence-bridge-rs"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
+rust-version = "1.88"
+authors = ["Sim-Lab"]
+license = "MIT"
+repository = "https://github.com/CryoRig/Teams-Presence-LED"
+description = "Windows tray app that mirrors your Microsoft Teams presence to a USB HID LED indicator"
 default-run = "TeamsPresenceBridge"
 
 [[bin]]
@@ -28,4 +33,4 @@ opt-level = "z"  # Optimize for size
 lto = true       # Enable Link Time Optimization
 strip = true     # Strip symbols from binary
 codegen-units = 1 # Better optimization
-panic = "abort"  # Remove panic unwinding code
+# panic = "unwind" (default) is required so a panicking bridge thread can be caught and restarted (see main.rs)

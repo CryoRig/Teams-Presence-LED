@@ -22,3 +22,7 @@ This project consists of two parts:
 ## Documentation
 
 - [Protocol Specification](docs/protocol.md) - Details the USB HID binary protocol used for communication between the bridge and firmware.
+
+## License
+
+MIT — see [LICENSE](LICENSE). © 2026 Sim-Lab.

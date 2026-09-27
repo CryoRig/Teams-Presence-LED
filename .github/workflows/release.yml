@@ -8,8 +8,38 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    name: Verify tag matches Cargo.toml and firmware version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compare versions
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_VER="${TAG#v}"
+          BRIDGE_VER=$(grep -m1 '^version' bridge/teams-presence-bridge-rs/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          FW_MAJOR=$(grep -m1 '#define FW_VERSION_MAJOR' firmware/src/main.cpp | awk '{print $3}')
+          FW_MINOR=$(grep -m1 '#define FW_VERSION_MINOR' firmware/src/main.cpp | awk '{print $3}')
+          FW_PATCH=$(grep -m1 '#define FW_VERSION_PATCH' firmware/src/main.cpp | awk '{print $3}')
+          FW_VER="$FW_MAJOR.$FW_MINOR.$FW_PATCH"
+          echo "tag=$TAG_VER bridge=$BRIDGE_VER firmware=$FW_VER"
+          FAIL=0
+          if [ "$TAG_VER" != "$BRIDGE_VER" ]; then
+            echo "::error::Release tag $TAG does not match bridge version $BRIDGE_VER in Cargo.toml"
+            FAIL=1
+          fi
+          if [ "$TAG_VER" != "$FW_VER" ]; then
+            echo "::error::Release tag $TAG does not match firmware version $FW_VER in firmware/src/main.cpp"
+            FAIL=1
+          fi
+          exit $FAIL
+
   build-bridge:
     name: Build Bridge (Windows)
+    needs: verify-version
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -35,6 +65,7 @@ jobs:
 
   build-firmware:
     name: Build Firmware
+    needs: verify-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -64,7 +95,23 @@ jobs:
         run: |
           cp .pio/build/seeed_xiao_esp32s3/firmware.bin seeed_xiao_esp32s3.bin
 
+      # SHA256SUMS is mandatory: the bridge refuses to flash firmware without it (updater.rs).
+      - name: Generate SHA256SUMS
+        working-directory: firmware
+        run: sha256sum seeed_xiao_esp32s3.bin > SHA256SUMS
+
+      # manifest.json lets the bridge compare bridge and firmware versions independently.
+      - name: Generate manifest.json
+        working-directory: firmware
+        run: |
+          BRIDGE_VER=$(grep -m1 '^version' ../bridge/teams-presence-bridge-rs/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          FW_MAJOR=$(grep -m1 '#define FW_VERSION_MAJOR' src/main.cpp | awk '{print $3}')
+          FW_MINOR=$(grep -m1 '#define FW_VERSION_MINOR' src/main.cpp | awk '{print $3}')
+          FW_PATCH=$(grep -m1 '#define FW_VERSION_PATCH' src/main.cpp | awk '{print $3}')
+          printf '{\n  "bridge": "%s",\n  "firmware": "%s.%s.%s"\n}\n' "$BRIDGE_VER" "$FW_MAJOR" "$FW_MINOR" "$FW_PATCH" > manifest.json
+          cat manifest.json
+
       - name: Upload firmware files to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} firmware/seeed_xiao_esp32s3.bin
+        run: gh release upload ${{ github.event.release.tag_name }} firmware/seeed_xiao_esp32s3.bin firmware/SHA256SUMS firmware/manifest.json

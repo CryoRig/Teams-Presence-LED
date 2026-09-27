@@ -7,11 +7,11 @@ This guide covers the one-time setup required to build and debug both the firmwa
 | Tool | Version | Purpose |
 |------|---------|---------|
 | [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
-| [Rust](https://www.rust-lang.org/) | 1.85+ (2024 edition) | Bridge application and diagnostics |
+| [Rust](https://www.rust-lang.org/) | 1.88+ (2024 edition, let-chains) | Bridge application and diagnostics |
 
 ## Board
 
-This project uses the **Seeed XIAO ESP32-S3**. It has a built-in USB-C connector that exposes both a CDC-ACM serial port (for debug logging) and a custom USB HID interface (VID `0x1209`, PID `0x0005`, Usage Page `0xFF00`) for communication with the bridge — no external FTDI or CH340 chip is needed.
+This project uses the **Seeed XIAO ESP32-S3**. Its built-in USB-C connector exposes a custom USB HID interface (VID `0x1209`, PID `0x0005`, Usage Page `0xFF00`) for communication with the bridge — no external FTDI or CH340 chip is needed. In normal operation the device is HID-only; a serial port (Espressif VID `0x303A`) only appears while it is in ROM bootloader mode.
 
 - Product page: [Seeed XIAO ESP32-S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - Upload protocol: `esptool` (via the built-in USB)
@@ -38,21 +38,28 @@ After installation, reconnect the XIAO board and verify it appears in Device Man
 
 ### Build and Flash
 
+Because the running firmware exposes no serial port, the device must first be put into ROM bootloader mode. Either hold **BOOT** while plugging in the cable, or — if firmware is already running — send the HID `BOOTLOADER` command:
+
 ```bash
-cd firmware
-pio run --target upload
+cd bridge/teams-presence-bridge-rs
+cargo run --example hid_cmd -- bootloader
 ```
 
+The device re-enumerates as a serial port (`pio device list` shows `VID:PID=303A:xxxx`). Then flash:
+
+```bash
+cd firmware
+pio run --target upload --upload-port COMx
+```
+
+> **Note:** If `pio` cannot connect, the device is already in bootloader mode, so a pre-reset is unnecessary:
+> `esptool --chip esp32s3 --port COMx --before no-reset --after hard-reset --no-stub write-flash 0x10000 .pio/build/seeed_xiao_esp32s3/firmware.bin`
+>
 > **Note:** On the XIAO ESP32-S3 via native USB, the board may not reset automatically after flashing even if the output says "Hard resetting via RTS pin...". If the new firmware does not start, unplug and re-plug the USB cable.
 
-### Serial Monitor
+### Debug Output
 
-```bash
-cd firmware
-pio device monitor
-```
-
-The monitor is configured with `send_on_enter` filter, local echo, and LF line endings to view debug logs at 115200 baud.
+The firmware does not use a CDC serial console (`ARDUINO_USB_CDC_ON_BOOT=0` — required so that the custom VID/PID take effect, see `platformio.ini`). Use the JTAG debugger below, or the bridge's console output (`cargo run`) for host-side diagnostics.
 
 ### Debugging
 

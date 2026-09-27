@@ -25,13 +25,15 @@ Use the command line to build and upload the firmware.
    ```bash
    cd firmware
    ```
-2. Build and upload using PlatformIO:
+2. Put the device into bootloader mode (`cargo run --example hid_cmd -- bootloader` from the bridge directory, or hold BOOT while plugging in), then build and upload using PlatformIO:
    ```bash
-   pio run -t upload
+   pio run -t upload --upload-port COMx
    ```
+   See [docs/setup.md](docs/setup.md#build-and-flash) for the fallback `esptool` command.
+3. **Enumeration Check:** Run `cargo run --bin hid_diag` from the bridge directory and verify the device is listed as `VID:1209 PID:0005 ... Teams Presence Bridge`.
    > **Note:** The upload output may say "Hard resetting via RTS pin...", but on the XIAO ESP32-S3 via native USB, it may not automatically reset. You may need to manually unplug and replug the USB cable to restart the device.
-3. **Boot Animation Check:** Upon successful upload (and unplug/replug if necessary), verify the LEDs display a rainbow boot animation that scrolls across the strip and fades to black.
-4. **Watchdog Check:** Wait for 60 seconds *without* starting the bridge application. The LEDs should begin a slow white breathing animation (Disconnected State).
+4. **Boot Animation Check:** Upon successful upload (and unplug/replug if necessary), verify the LEDs display a rainbow boot animation that scrolls across the strip and fades to black.
+5. **Watchdog Check:** Wait for 60 seconds *without* starting the bridge application. The LEDs should begin a slow white breathing animation (Disconnected State).
 
 ---
 
@@ -47,10 +49,11 @@ Use the command line to run the Rust bridge application. Ensure the firmware is 
    cargo run
    ```
 3. **HID Connection Check:** Verify the bridge successfully detects the HID device (the XIAO ESP32-S3) in its console output/logs.
-4. **Teams API Connection Check:** Verify the bridge successfully connects to the local Teams API and retrieves presence states.
+4. **Teams Log Parsing Check:** Verify the bridge detects and parses the local Teams log files (`%LOCALAPPDATA%\Packages\MSTeams_8wekyb3d8bbwe\LocalCache\Microsoft\MSTeams\Logs`) and reports presence states in its console output/logs. Quit Teams and verify the bridge reports `Offline`.
 5. **System Tray UI Check:** 
    - Verify the system tray icon for the Teams Presence Bridge appears.
-   - Right-click the tray icon and verify the context menu options are responsive (e.g., Autostart, Updates, Settings).
+   - Right-click the tray icon and verify the context menu shows the ESP32 and Teams status lines, **Check for Updates**, and **Quit**.
+   - Left-click the tray icon and verify the settings window opens (Autostart, intervals, brightness, presence mapping).
    - If changes were made to `config.json` logic, verify those settings apply correctly.
 
 ---

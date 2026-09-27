@@ -10,7 +10,7 @@ This document defines the binary protocol used for communication between the **T
 - **Output Report Size:** 6 bytes (1 byte Report ID + 5 bytes data)
 - **Input Report Size:** 6 bytes (1 byte Report ID + 5 bytes data)
 
-*Note: The ESP32 also exposes a secondary CDC Serial interface which can be used for debugging at 115200 baud.*
+*Note: In normal operation the device is HID-only (no CDC serial port). A USB-Serial/JTAG port only appears while the device is in ROM bootloader mode (see `0x09`).*
 
 ## Command Set (Output Report)
 
@@ -70,7 +70,7 @@ Triggers a software reboot of the ESP32. Intended for development and diagnostic
 - **Parameters:** `0x00` (ignored)
 
 ### 0x09: Bootloader
-Forces the device into bootloader/download mode (UF2 drive on Pico, ROM bootloader on ESP32).
+Forces the device into ROM bootloader/download mode (ESP32-S3) so the bridge can flash new firmware over USB-Serial/JTAG.
 - **Command ID:** `0x09`
 - **Parameters:** `0x00` (ignored)
 
@@ -78,7 +78,7 @@ Forces the device into bootloader/download mode (UF2 drive on Pico, ROM bootload
 Queries the firmware version and hardware variant.
 - **Command ID:** `0x0A`
 - **Parameters:** `0x00` (ignored)
-- **Response:** Sends an Input Report with Status Code `0x0A` followed by `[Major] [Minor] [Patch] [Variant]`.
+- **Response:** Sends an Input Report with Status Code `0x0A` followed by `[Major] [Minor] [Patch] [Variant]`. Variant `1` = Seeed XIAO ESP32-S3 (the only supported hardware); the bridge refuses to offer firmware updates for any other value.
 
 ## Responses (Input Report)
 

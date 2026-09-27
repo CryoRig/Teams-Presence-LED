@@ -83,7 +83,10 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
     for asset in response.assets {
         if asset.name == "seeed_xiao_esp32s3.bin" || asset.name == "firmware.bin" {
             firmware_download_url = Some(asset.browser_download_url);
-        } else if asset.name.eq_ignore_ascii_case("SHA256SUMS") || asset.name.ends_with(".sha256") {
+        } else if asset.name.eq_ignore_ascii_case("SHA256SUMS.txt")
+            || asset.name.eq_ignore_ascii_case("SHA256SUMS")
+            || asset.name.ends_with(".sha256")
+        {
             firmware_sha256sums_url = Some(asset.browser_download_url);
         } else if asset.name == "manifest.json" {
             manifest_url = Some(asset.browser_download_url);

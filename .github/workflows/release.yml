@@ -10,10 +10,10 @@ permissions:
 jobs:
   verify-version:
     name: Verify tag matches Cargo.toml and firmware version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Compare versions
         env:
@@ -43,7 +43,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -66,18 +66,18 @@ jobs:
   build-firmware:
     name: Build Firmware
     needs: verify-version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: platformio-${{ hashFiles('firmware/platformio.ini') }}
@@ -95,11 +95,6 @@ jobs:
         run: |
           cp .pio/build/seeed_xiao_esp32s3/firmware.bin seeed_xiao_esp32s3.bin
 
-      # SHA256SUMS is mandatory: the bridge refuses to flash firmware without it (updater.rs).
-      - name: Generate SHA256SUMS
-        working-directory: firmware
-        run: sha256sum seeed_xiao_esp32s3.bin > SHA256SUMS
-
       # manifest.json lets the bridge compare bridge and firmware versions independently.
       - name: Generate manifest.json
         working-directory: firmware
@@ -114,4 +109,28 @@ jobs:
       - name: Upload firmware files to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} firmware/seeed_xiao_esp32s3.bin firmware/SHA256SUMS firmware/manifest.json
+        run: gh release upload ${{ github.event.release.tag_name }} firmware/seeed_xiao_esp32s3.bin firmware/manifest.json
+
+  # Hash every uploaded asset into one SHA256SUMS.txt. The bridge updater requires it
+  # (refuses unverified firmware); the .txt suffix keeps it openable on Windows.
+  checksums:
+    name: Publish SHA256SUMS.txt
+    needs: [build-bridge, build-firmware]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download ${{ github.event.release.tag_name }} --repo ${{ github.repository }} --dir assets
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: assets
+        run: |
+          rm -f SHA256SUMS SHA256SUMS.txt
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} assets/SHA256SUMS.txt --clobber

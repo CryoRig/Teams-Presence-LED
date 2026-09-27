@@ -20,6 +20,7 @@ pub struct TeamsBridgeApp {
     bootloader_trigger: Arc<std::sync::atomic::AtomicBool>,
     update_ui_state: Arc<Mutex<crate::update_ui::UpdateUiState>>,
     config_dirty: bool,
+    last_saved_time: Option<std::time::Instant>,
 }
 
 impl TeamsBridgeApp {
@@ -108,6 +109,7 @@ impl TeamsBridgeApp {
             bootloader_trigger,
             update_ui_state,
             config_dirty: false,
+            last_saved_time: None,
         }
     }
 }
@@ -181,75 +183,75 @@ impl eframe::App for TeamsBridgeApp {
         }
 
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Teams Presence Bridge Settings");
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.heading("Teams Presence Bridge Settings");
 
-            ui.add_space(10.0);
-            egui::Grid::new("settings_grid")
-                .num_columns(2)
-                .spacing([20.0, 10.0])
-                .min_col_width(120.0)
-                .show(ui, |ui| {
-                    ui.label("Run on Windows Startup:");
-                    if ui.checkbox(&mut self.autostart_enabled, "Enable Autostart").changed()
-                        && let Err(e) = crate::autostart::set_autostart(self.autostart_enabled) {
-                            eprintln!("Failed to update autostart setting: {}", e);
-                            // Revert on failure
-                            self.autostart_enabled = !self.autostart_enabled;
+                ui.add_space(10.0);
+                egui::Grid::new("settings_grid")
+                    .num_columns(2)
+                    .spacing([20.0, 10.0])
+                    .min_col_width(120.0)
+                    .show(ui, |ui| {
+                        ui.label("Run on Windows Startup:");
+                        if ui.checkbox(&mut self.autostart_enabled, "Enable Autostart").changed()
+                            && let Err(e) = crate::autostart::set_autostart(self.autostart_enabled) {
+                                eprintln!("Failed to update autostart setting: {}", e);
+                                // Revert on failure
+                                self.autostart_enabled = !self.autostart_enabled;
+                            }
+                        ui.end_row();
+
+                        ui.label("Poll Interval (ms):");
+                        if ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000)).changed() {
+                            self.config_dirty = true;
                         }
-                    ui.end_row();
+                        ui.end_row();
 
-                    ui.label("Poll Interval (ms):");
-                    if ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000)).changed() {
-                        self.config_dirty = true;
-                    }
-                    ui.end_row();
+                        ui.label("Ping Interval (ms):");
+                        if ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000)).changed() {
+                            self.config_dirty = true;
+                        }
+                        ui.end_row();
+                    });
 
-                    ui.label("Ping Interval (ms):");
-                    if ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000)).changed() {
-                        self.config_dirty = true;
-                    }
-                    ui.end_row();
-                });
+                ui.add_space(20.0);
+                ui.heading("Brightness & Transitions");
+                ui.add_space(5.0);
 
-            ui.add_space(20.0);
-            ui.heading("Brightness & Transitions");
-            ui.add_space(5.0);
+                let brightness_pct = (self.local_config.brightness as f32 / 255.0 * 100.0).round() as u32;
+                let mut brightness_slider_val = brightness_pct as i32;
+                let slider = egui::Slider::new(&mut brightness_slider_val, 0..=100)
+                    .suffix("%")
+                    .text("Global LED Brightness");
+                if ui.add(slider).changed() {
+                    let new_brightness = (brightness_slider_val as f32 * 255.0 / 100.0).round() as u8;
+                    self.local_config.brightness = new_brightness;
+                    self.config_dirty = true;
+                    // Live preview: immediately push brightness to shared config
+                    // so the bridge loop picks it up and sends to ESP
+                    self.config.lock().unwrap().brightness = new_brightness;
+                }
 
-            let brightness_pct = (self.local_config.brightness as f32 / 255.0 * 100.0).round() as u32;
-            let mut brightness_slider_val = brightness_pct as i32;
-            let slider = egui::Slider::new(&mut brightness_slider_val, 0..=100)
-                .suffix("%")
-                .text("Global LED Brightness");
-            if ui.add(slider).changed() {
-                let new_brightness = (brightness_slider_val as f32 * 255.0 / 100.0).round() as u8;
-                self.local_config.brightness = new_brightness;
-                self.config_dirty = true;
-                // Live preview: immediately push brightness to shared config
-                // so the bridge loop picks it up and sends to ESP
-                self.config.lock().unwrap().brightness = new_brightness;
-            }
+                let mut transition_val = self.local_config.transition_duration_ms as i32;
+                let transition_slider = egui::Slider::new(&mut transition_val, 0..=2000)
+                    .step_by(50.0)
+                    .suffix(" ms")
+                    .text("Transition Duration (0 = Disabled)");
+                if ui.add(transition_slider).changed() {
+                    let new_transition = transition_val as u16;
+                    self.local_config.transition_duration_ms = new_transition;
+                    self.config_dirty = true;
+                    self.config.lock().unwrap().transition_duration_ms = new_transition;
+                }
 
-            let mut transition_val = self.local_config.transition_duration_ms as i32;
-            let transition_slider = egui::Slider::new(&mut transition_val, 0..=2000)
-                .step_by(50.0)
-                .suffix(" ms")
-                .text("Transition Duration (0 = Disabled)");
-            if ui.add(transition_slider).changed() {
-                let new_transition = transition_val as u16;
-                self.local_config.transition_duration_ms = new_transition;
-                self.config_dirty = true;
-                self.config.lock().unwrap().transition_duration_ms = new_transition;
-            }
+                ui.add_space(20.0);
+                ui.heading("Presence Mapping");
+                ui.add_space(10.0);
+                
+                // Sort keys to maintain stable order
+                let mut keys: Vec<String> = self.local_config.presence_map.keys().cloned().collect();
+                keys.sort();
 
-            ui.add_space(20.0);
-            ui.heading("Presence Mapping");
-            ui.add_space(10.0);
-            
-            // Sort keys to maintain stable order
-            let mut keys: Vec<String> = self.local_config.presence_map.keys().cloned().collect();
-            keys.sort();
-
-            egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
                 egui::Grid::new("presence_mapping_grid")
                     .num_columns(2)
                     .spacing([20.0, 10.0])
@@ -267,43 +269,50 @@ impl eframe::App for TeamsBridgeApp {
                             ui.end_row();
                         }
                     });
-            });
 
-            ui.add_space(10.0);
-            egui::Grid::new("watchdog_grid")
-                .num_columns(2)
-                .spacing([20.0, 10.0])
-                .min_col_width(120.0)
-                .show(ui, |ui| {
-                    ui.label("Watchdog:");
-                    ui.horizontal(|ui| {
-                        if render_color_command(ui, &mut self.local_config.watchdog, "watchdog") {
-                            self.config_dirty = true;
-                        }
+                ui.add_space(10.0);
+                egui::Grid::new("watchdog_grid")
+                    .num_columns(2)
+                    .spacing([20.0, 10.0])
+                    .min_col_width(120.0)
+                    .show(ui, |ui| {
+                        ui.label("Watchdog:");
+                        ui.horizontal(|ui| {
+                            if render_color_command(ui, &mut self.local_config.watchdog, "watchdog") {
+                                self.config_dirty = true;
+                            }
+                        });
+                        ui.end_row();
                     });
-                    ui.end_row();
-                });
 
-            ui.add_space(20.0);
-            let save_label = if self.config_dirty {
-                "Save Configuration *"
-            } else {
-                "Save Configuration"
-            };
-
-            if ui.button(save_label).clicked() {
-                if let Err(e) = crate::config::save_config(&self.config_path, &self.local_config) {
-                    eprintln!("Failed to save config: {}", e);
+                ui.add_space(20.0);
+                let save_label = if self.config_dirty {
+                    "Save Configuration *"
                 } else {
-                    // Update shared config
-                    *self.config.lock().unwrap() = self.local_config.clone();
-                    self.config_dirty = false;
-                }
-            }
+                    "Save Configuration"
+                };
 
-            if self.config_dirty {
-                ui.label("Unsaved configuration changes");
-            }
+                if ui.button(save_label).clicked() {
+                    if let Err(e) = crate::config::save_config(&self.config_path, &self.local_config) {
+                        eprintln!("Failed to save config: {}", e);
+                    } else {
+                        // Update shared config
+                        *self.config.lock().unwrap() = self.local_config.clone();
+                        self.config_dirty = false;
+                        self.last_saved_time = Some(std::time::Instant::now());
+                    }
+                }
+
+                if self.config_dirty {
+                    ui.colored_label(egui::Color32::from_rgb(255, 165, 0), "⚠ Unsaved configuration changes");
+                } else if let Some(saved_time) = self.last_saved_time {
+                    if saved_time.elapsed() < std::time::Duration::from_secs(4) {
+                        ui.colored_label(egui::Color32::from_rgb(0, 200, 0), "✔ Configuration saved successfully");
+                    }
+                }
+
+                ui.add_space(15.0);
+            });
         });
 
         crate::update_ui::render(

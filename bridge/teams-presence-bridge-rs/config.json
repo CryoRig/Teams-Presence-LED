@@ -22,6 +22,12 @@
       "g": 0,
       "b": 0
     },
+    "BusyIdle": {
+      "command": "BREATHE_SLOW",
+      "r": 200,
+      "g": 0,
+      "b": 0
+    },
     "BeRightBack": {
       "command": "BREATHE_SLOW",
       "r": 255,
@@ -38,6 +44,12 @@
       "command": "SOLID",
       "r": 0,
       "g": 200,
+      "b": 0
+    },
+    "AvailableIdle": {
+      "command": "BREATHE_SLOW",
+      "r": 255,
+      "g": 120,
       "b": 0
     },
     "Offline": {

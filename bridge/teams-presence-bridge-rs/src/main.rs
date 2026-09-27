@@ -153,7 +153,10 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_visible(false) // Start hidden
             .with_taskbar(false) // Hide from taskbar when hidden
-            .with_inner_size([450.0, 500.0])
+            .with_inner_size([500.0, 720.0])
+            .with_min_inner_size([450.0, 400.0])
+            .with_inner_size([420.0, 560.0])
+            .with_min_inner_size([360.0, 300.0])
             .with_title("Teams Presence Bridge Settings"),
         ..Default::default()
     };

@@ -29,9 +29,11 @@ impl Default for Config {
         presence_map.insert("DoNotDisturb".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
         presence_map.insert("Away".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 120, b: 0 });
         presence_map.insert("Busy".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
+        presence_map.insert("BusyIdle".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 200, g: 0, b: 0 });
         presence_map.insert("BeRightBack".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 80, b: 0 });
         presence_map.insert("Unknown".into(), ColorCommand { command: "BREATHE".into(), r: 80, g: 80, b: 80 });
         presence_map.insert("Available".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 200, b: 0 });
+        presence_map.insert("AvailableIdle".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 120, b: 0 });
         presence_map.insert("Offline".into(), ColorCommand { command: "OFF".into(), r: 0, g: 0, b: 0 });
 
         Self {
@@ -70,7 +72,11 @@ impl ColorCommand {
 
 pub fn load_config(path: &str) -> Result<Config, Box<dyn std::error::Error>> {
     let contents = fs::read_to_string(path)?;
-    let config: Config = serde_json::from_str(&contents)?;
+    let mut config: Config = serde_json::from_str(&contents)?;
+    let default = Config::default();
+    for (k, v) in default.presence_map {
+        config.presence_map.entry(k).or_insert(v);
+    }
     Ok(config)
 }
 
@@ -78,4 +84,46 @@ pub fn save_config(path: &str, config: &Config) -> Result<(), Box<dyn std::error
     let json = serde_json::to_string_pretty(config)?;
     fs::write(path, json)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_includes_all_presence_states() {
+        let config = Config::default();
+        assert!(config.presence_map.contains_key("Available"));
+        assert!(config.presence_map.contains_key("AvailableIdle"));
+        assert!(config.presence_map.contains_key("Busy"));
+        assert!(config.presence_map.contains_key("BusyIdle"));
+        assert!(config.presence_map.contains_key("Away"));
+        assert!(config.presence_map.contains_key("BeRightBack"));
+        assert!(config.presence_map.contains_key("DoNotDisturb"));
+        assert!(config.presence_map.contains_key("Offline"));
+        assert!(config.presence_map.contains_key("Unknown"));
+    }
+
+    #[test]
+    fn test_load_config_merges_missing_defaults() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("partial_config.json");
+        // Write a json missing AvailableIdle and BusyIdle
+        let partial_json = r#"{
+            "pollIntervalMs": 5000,
+            "pingIntervalMs": 15000,
+            "brightness": 191,
+            "transitionDurationMs": 500,
+            "presenceMap": {
+                "Available": { "command": "SOLID", "r": 0, "g": 200, "b": 0 }
+            },
+            "watchdog": { "command": "BREATHE_SLOW", "r": 255, "g": 255, "b": 255 }
+        }"#;
+        fs::write(&path, partial_json).unwrap();
+
+        let loaded = load_config(path.to_str().unwrap()).unwrap();
+        assert!(loaded.presence_map.contains_key("AvailableIdle"));
+        assert!(loaded.presence_map.contains_key("BusyIdle"));
+        assert_eq!(loaded.presence_map.get("Available").unwrap().command, "SOLID");
+    }
 }

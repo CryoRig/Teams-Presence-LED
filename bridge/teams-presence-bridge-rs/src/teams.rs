@@ -2,8 +2,13 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{Instant, Duration};
+use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
 const INITIAL_READ_TAIL_BYTES: u64 = 256 * 1024;
+const TEAMS_PROCESS_NAME: &str = "ms-teams.exe";
+const PROCESS_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+/// Presence reported while the Teams process is not running (maps to the "Offline" entry).
+const PRESENCE_OFFLINE: &str = "Offline";
 
 pub struct TeamsClient {
     log_directory: PathBuf,
@@ -11,6 +16,9 @@ pub struct TeamsClient {
     last_position: u64,
     last_presence: Option<String>,
     last_dir_scan: Option<Instant>,
+    system: System,
+    last_process_check: Option<Instant>,
+    teams_running: bool,
 }
 
 impl TeamsClient {
@@ -27,7 +35,7 @@ impl TeamsClient {
             .join("MSTeams")
             .join("Logs");
             
-        println!("[TeamsClient] Initialized using log directory: {:?}", log_directory);
+        eprintln!("[TeamsClient] Initialized using log directory: {:?}", log_directory);
 
         Self {
             log_directory,
@@ -35,6 +43,9 @@ impl TeamsClient {
             last_position: 0,
             last_presence: None,
             last_dir_scan: None,
+            system: System::new(),
+            last_process_check: None,
+            teams_running: false,
         }
     }
 
@@ -44,7 +55,30 @@ impl TeamsClient {
             .is_some_and(|path| path.exists())
     }
 
+    fn is_teams_running(&mut self) -> bool {
+        if self.last_process_check.is_none_or(|t| t.elapsed() >= PROCESS_CHECK_INTERVAL) {
+            self.system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+            let running = self
+                .system
+                .processes()
+                .values()
+                .any(|p| p.name().eq_ignore_ascii_case(TEAMS_PROCESS_NAME));
+            if running != self.teams_running {
+                eprintln!("[TeamsClient] {} is {}", TEAMS_PROCESS_NAME, if running { "running" } else { "not running" });
+            }
+            self.teams_running = running;
+            self.last_process_check = Some(Instant::now());
+        }
+        self.teams_running
+    }
+
     pub fn get_presence(&mut self) -> Option<String> {
+        if !self.is_teams_running() {
+            // Drop the stale state so a restarted Teams does not briefly replay it
+            self.last_presence = None;
+            return Some(PRESENCE_OFFLINE.to_string());
+        }
+
         if !self.log_directory.exists() {
             return None;
         }
@@ -75,7 +109,7 @@ impl TeamsClient {
         if let Some(file_path) = newest_file {
             if self.current_file != Some(file_path.clone()) {
                 if self.current_file.is_some() {
-                    println!("[TeamsClient] Log rotated -> {:?}", file_path.file_name().unwrap());
+                    eprintln!("[TeamsClient] Log rotated -> {:?}", file_path.file_name().unwrap());
                 }
                 self.current_file = Some(file_path.clone());
                 self.last_position = 0;
@@ -86,7 +120,8 @@ impl TeamsClient {
                 if let Ok(metadata) = file.metadata() {
                     if metadata.len() < self.last_position {
                         self.last_position = 0;
-                    } else if self.last_position == 0 {
+                    }
+                    if self.last_position == 0 {
                         self.last_position = metadata.len().saturating_sub(INITIAL_READ_TAIL_BYTES);
                     }
                 }

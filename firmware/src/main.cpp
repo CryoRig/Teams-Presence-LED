@@ -3,18 +3,18 @@
 #include <Arduino.h>
 #include <FastLED.h>
 #include <math.h>
-#ifdef ARDUINO_ARCH_ESP32
-#include "Esp32UsbManager.h"
 #include <soc/rtc_cntl_reg.h>
-#endif
+#include "UsbManager.h"
 
-IUsbManager* usbManager = nullptr;
+UsbManager usbManager;
 
 
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 5
+#define FW_VERSION_MINOR 6
 #define FW_VERSION_PATCH 0
+// Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
+#define HW_VARIANT 1
 
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
@@ -115,18 +115,23 @@ void bootAnimation() {
 }
 
 // --- HID Callback ---
+// Any valid command proves the host is alive: refresh the watchdog and leave the disconnected state.
+static void markHostAlive() {
+    if (currentState == STATE_DISCONNECTED) {
+        startStateTransition();
+        currentState = lastCommandedState;
+        targetColor = lastCommandedColor;
+    }
+    lastHeartbeat = millis();
+}
+
 void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
     uint8_t response[2] = {0x02, 0x00}; // OK by default
 
     switch (cmd) {
         case 0x01: // PING
             response[0] = 0x01; // PONG
-            if (currentState == STATE_DISCONNECTED) {
-                startStateTransition();
-                currentState = lastCommandedState;
-                targetColor = lastCommandedColor;
-            }
-            lastHeartbeat = millis();
+            markHostAlive();
             break;
         case 0x02: // OFF
             startStateTransition();
@@ -161,50 +166,34 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
             break;
         case 0x06: // BRIGHTNESS
             FastLED.setBrightness(p1);
-            FastLED.show();
-            lastHeartbeat = millis();
+            showSolid(lastHardwareColor, true); // Re-push the cached color at the new brightness
+            markHostAlive();
             break;
         case 0x07: // TRANSITION
             transitionDurationMs = ((uint16_t)p1 << 8) | p2;
             if (transitionDurationMs > 10000) transitionDurationMs = 10000;
-            lastHeartbeat = millis();
+            markHostAlive();
             break;
         case 0x08: // RESET
-#if defined(ARDUINO_ARCH_ESP32)
             ESP.restart();
-#endif
             break;
         case 0x09: // BOOTLOADER
-#if defined(ARDUINO_ARCH_ESP32)
             REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
             ESP.restart();
-#endif
             break;
         case 0x0A: // VERSION
-            if (usbManager) {
-                usbManager->sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
-            }
+            usbManager.sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
             return; // Skip default 2-byte response
         default:
             response[0] = 0xFF; // ERR
             break;
     }
 
-    if (usbManager) {
-        usbManager->sendResponse(response[0], response[1]);
-    }
+    usbManager.sendResponse(response[0], response[1]);
 }
 
 void setup() {
-#ifdef ARDUINO_ARCH_ESP32
-    usbManager = new Esp32UsbManager();
-#endif
-
-    if (usbManager) {
-        usbManager->begin(onUsbCommand);
-    }
-
-
+    usbManager.begin(onUsbCommand);
 
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 480mA for USB safety (note: full white will be dimmed by FastLED to meet this budget)
@@ -217,9 +206,7 @@ void setup() {
 }
 
 void loop() {
-    if (usbManager) {
-        usbManager->loop();
-    }
+    usbManager.loop();
 
     unsigned long now = millis();
 

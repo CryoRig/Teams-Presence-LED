@@ -15,7 +15,7 @@ This project uses the **Seeed XIAO ESP32-S3**. Its built-in USB-C connector expo
 
 - Product page: [Seeed XIAO ESP32-S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - Upload protocol: `esptool` (via the built-in USB)
-- Framework: Arduino (via [pioarduino](https://github.com/pioarduino/platform-espressif32.git))
+- Framework: Arduino (via PlatformIO `espressif32@7.0.1`)
 
 ## Windows USB Driver (One-Time)
 
@@ -109,4 +109,3 @@ Before full system use, confirm:
 - [ ] The LEDs run their rainbow boot animation upon startup
 - [ ] `cargo run --bin hid_diag` discovers the HID device with Usage Page `0xFF00`
 - [ ] `cargo run` launches the bridge, shows the tray icon, and synchronizes your Microsoft Teams presence state to the LEDs
-

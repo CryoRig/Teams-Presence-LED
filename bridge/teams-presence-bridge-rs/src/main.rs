@@ -1,4 +1,4 @@
-//#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
 mod config;
@@ -9,7 +9,7 @@ mod updater;
 mod flasher;
 mod update_ui;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::fs;
 use std::thread;
@@ -26,6 +26,17 @@ pub struct AppStatus {
     pub teams_parsing: bool,
     pub firmware_version: Option<(u8, u8, u8, u8)>,
     pub update_available: bool,
+}
+
+/// Mutex lock that recovers from poisoning instead of propagating a panic across threads.
+pub trait LockOrRecover<T> {
+    fn lock_or_recover(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> LockOrRecover<T> for Mutex<T> {
+    fn lock_or_recover(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 fn main() -> eframe::Result<()> {
@@ -105,16 +116,27 @@ fn main() -> eframe::Result<()> {
     )));
     let app_update_ui_state = update_ui_state.clone();
 
-    // Spawn background bridge thread
+    // Spawn background bridge thread; a panic inside the loop is logged and the loop restarted
     thread::spawn(move || {
-        run_bridge_loop(
-            background_config,
-            background_status,
-            background_ctx,
-            background_shutdown,
-            background_flash_pause,
-            background_bootloader_trigger,
-        );
+        loop {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_bridge_loop(
+                    background_config.clone(),
+                    background_status.clone(),
+                    background_ctx.clone(),
+                    background_shutdown.clone(),
+                    background_flash_pause.clone(),
+                    background_bootloader_trigger.clone(),
+                );
+            }));
+            match result {
+                Ok(()) => break,
+                Err(_) => {
+                    eprintln!("[Bridge] Bridge loop panicked; restarting in 1 s");
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
     });
 
     // Spawn background update check on startup
@@ -125,7 +147,7 @@ fn main() -> eframe::Result<()> {
         // Wait up to 10 seconds for the egui Context to be initialized
         let mut egui_ctx = None;
         for _ in 0..100 {
-            if let Some(c) = startup_ctx.lock().unwrap().as_ref() {
+            if let Some(c) = startup_ctx.lock_or_recover().as_ref() {
                 egui_ctx = Some(c.clone());
                 break;
             }
@@ -134,14 +156,14 @@ fn main() -> eframe::Result<()> {
 
         // Run the update check
         if let Ok(latest) = updater::fetch_latest_release() {
-            let mut s = startup_update_state.lock().unwrap();
+            let mut s = startup_update_state.lock_or_recover();
             let fw_version_opt = s.firmware_current.clone();
             let res = updater::check_updates(&s.bridge_current, fw_version_opt.as_ref(), &latest);
             s.latest_release = Some(latest);
             s.bridge_update_available = res.bridge_update_available;
             s.firmware_update_available = res.firmware_update_available;
             
-            startup_status.lock().unwrap().update_available = res.bridge_update_available || res.firmware_update_available;
+            startup_status.lock_or_recover().update_available = res.bridge_update_available || res.firmware_update_available;
 
             if let Some(c) = egui_ctx {
                 c.request_repaint();
@@ -153,9 +175,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_visible(false) // Start hidden
             .with_taskbar(false) // Hide from taskbar when hidden
-            .with_inner_size([500.0, 720.0])
-            .with_min_inner_size([450.0, 400.0])
-            .with_inner_size([420.0, 560.0])
+            .with_inner_size([420.0, 600.0])
             .with_min_inner_size([360.0, 300.0])
             .with_title("Teams Presence Bridge Settings"),
         ..Default::default()
@@ -166,7 +186,7 @@ fn main() -> eframe::Result<()> {
         "Teams Presence Bridge Settings",
         options,
         Box::new(move |cc| {
-            *shared_ctx.lock().unwrap() = Some(cc.egui_ctx.clone());
+            *shared_ctx.lock_or_recover() = Some(cc.egui_ctx.clone());
             Ok(Box::new(ui::TeamsBridgeApp::new(
                 cc,
                 shared_config,
@@ -209,9 +229,17 @@ fn run_bridge_loop(
     let mut last_poll_time = Instant::now();
     let mut last_sent_brightness: Option<u8> = None; // Track to detect live slider changes
     let mut last_sent_transition: Option<u16> = None; // Track to detect live slider changes
+    let mut teams_parsing = false;
 
     loop {
         let now = Instant::now();
+
+        if shutdown_flag.load(Ordering::Relaxed) {
+            if let Some(h) = hid_manager.as_mut() {
+                h.send_color_command(0x02, 0, 0, 0); // CMD_OFF
+            }
+            break;
+        }
 
         if hid_manager.is_none() && now.duration_since(last_hid_init_attempt) >= Duration::from_secs(5) {
             last_hid_init_attempt = now;
@@ -219,7 +247,7 @@ fn run_bridge_loop(
                 Ok(mut manager) => {
                     let connected = manager.connect();
                     if connected {
-                        let c = config.lock().unwrap();
+                        let c = config.lock_or_recover();
                         manager.send_brightness(c.brightness);
                         last_sent_brightness = Some(c.brightness);
                         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -258,17 +286,10 @@ fn run_bridge_loop(
             thread::sleep(Duration::from_millis(100));
             continue;
         }
-        // Fast tick for shutdown and UI responsiveness
-        if shutdown_flag.load(Ordering::Relaxed) {
-            if let Some(h) = hid_manager.as_mut() {
-                h.send_color_command(0x02, 0, 0, 0); // CMD_OFF
-            }
-            break;
-        }
 
-        let (poll_interval, ping_interval, presence_map, watchdog, brightness, transition_duration_ms) = {
-            let c = config.lock().unwrap();
-            (c.poll_interval_ms, c.ping_interval_ms, c.presence_map.clone(), c.watchdog.clone(), c.brightness, c.transition_duration_ms)
+        let (poll_interval, ping_interval, brightness, transition_duration_ms) = {
+            let c = config.lock_or_recover();
+            (c.poll_interval_ms, c.ping_interval_ms, c.brightness, c.transition_duration_ms)
         };
 
         // 1. Slow tick: Teams polling and Serial reconnection
@@ -276,27 +297,31 @@ fn run_bridge_loop(
             last_poll_time = now;
 
             // If not connected, drop context and retry next tick
-            if let Some(h) = hid_manager.as_ref() {
-                if !h.is_connected() {
+            if let Some(h) = hid_manager.as_ref()
+                && !h.is_connected() {
                     hid_manager = None;
                     continue;
                 }
-            }
 
             // Query version if we are connected but don't have it yet
             if let Some(h) = hid_manager.as_mut()
                 && h.is_connected() {
-                    let has_version = status.lock().unwrap().firmware_version.is_some();
+                    let has_version = status.lock_or_recover().firmware_version.is_some();
                     if !has_version
                         && let Some(ver) = h.query_firmware_version() {
                             eprintln!("[Bridge] Queried firmware version: v{}.{}.{} (variant: {})", ver.0, ver.1, ver.2, ver.3);
-                            status.lock().unwrap().firmware_version = Some(ver);
+                            status.lock_or_recover().firmware_version = Some(ver);
                         }
                 }
 
             let presence = teams_client.get_presence();
+            teams_parsing = teams_client.has_valid_log();
             if presence != previous_presence {
                 if let Some(p) = &presence {
+                    let (presence_map, watchdog) = {
+                        let c = config.lock_or_recover();
+                        (c.presence_map.clone(), c.watchdog.clone())
+                    };
                     eprintln!("[Bridge] Presence changed to: {}", p);
                     let cmd_params = if let Some(c) = presence_map.get(p) {
                         eprintln!("[Bridge] Found mapped color for {}: {:?}", p, c);
@@ -342,14 +367,13 @@ fn run_bridge_loop(
 
         // 4. Update UI Status
         let connected = hid_manager.as_ref().is_some_and(|h| h.is_connected());
-        let parsing = teams_client.has_valid_log();
 
         let mut status_changed = false;
         {
-            let mut s = status.lock().unwrap();
-            if s.esp_connected != connected || s.teams_parsing != parsing {
+            let mut s = status.lock_or_recover();
+            if s.esp_connected != connected || s.teams_parsing != teams_parsing {
                 s.esp_connected = connected;
-                s.teams_parsing = parsing;
+                s.teams_parsing = teams_parsing;
                 if !connected {
                     s.firmware_version = None;
                 }
@@ -357,7 +381,7 @@ fn run_bridge_loop(
             }
         }
         if status_changed
-            && let Some(ctx) = ctx.lock().unwrap().as_ref() {
+            && let Some(ctx) = ctx.lock_or_recover().as_ref() {
                 ctx.request_repaint();
             }
 

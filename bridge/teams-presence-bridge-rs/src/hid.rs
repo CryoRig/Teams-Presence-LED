@@ -19,10 +19,14 @@ const CMD_VERSION: u8      = 0x0A;
 // Response status codes
 const STATUS_PONG: u8 = 0x01;
 
+// Consecutive pings without PONG before the device is considered gone
+const MAX_MISSED_PONGS: u8 = 3;
+
 pub struct HidManager {
     api: HidApi,
     device: Option<HidDevice>,
     missing_device_logged: bool,
+    missed_pongs: u8,
 }
 
 impl HidManager {
@@ -32,6 +36,7 @@ impl HidManager {
             api,
             device: None,
             missing_device_logged: false,
+            missed_pongs: 0,
         })
     }
 
@@ -43,14 +48,14 @@ impl HidManager {
         for info in self.api.device_list() {
             if info.usage_page() == USAGE_PAGE {
                 let is_target_vid_pid = info.vendor_id() == TARGET_VID && info.product_id() == TARGET_PID;
-                let is_xiao = info.vendor_id() == 0x2886 && info.product_id() == 0x0056;
                 let is_product_match = info.product_string().is_some_and(|s| s.contains("Teams Presence Bridge"));
                 
-                if is_target_vid_pid || is_xiao || is_product_match {
+                if is_target_vid_pid || is_product_match {
                     match info.open_device(&self.api) {
                         Ok(dev) => {
                             self.device = Some(dev);
                             self.missing_device_logged = false;
+                            self.missed_pongs = 0;
                             eprintln!("[HidManager] Connected to HID device (VID: {:04X}, PID: {:04X})", info.vendor_id(), info.product_id());
                             return true;
                         }
@@ -62,7 +67,10 @@ impl HidManager {
             }
         }
         if !self.missing_device_logged {
-            eprintln!("[HidManager] No device found with usage page 0x{:04X}", USAGE_PAGE);
+            eprintln!(
+                "[HidManager] No Teams Presence Bridge found (usage page 0x{:04X} with VID {:04X}/PID {:04X} or matching product string)",
+                USAGE_PAGE, TARGET_VID, TARGET_PID
+            );
             self.missing_device_logged = true;
         }
         false
@@ -93,7 +101,8 @@ impl HidManager {
             
             while start.elapsed().as_millis() < timeout {
                 match dev.read_timeout(&mut buf, 10) {
-                    Ok(n) if n > 1 => {
+                    // hidapi's Windows backend prepends the report ID, so buf[0] = 0x06 and buf[1] = status code
+                    Ok(n) if n > 1 && buf[0] == HID_REPORT_ID_VENDOR => {
                         if buf[1] == STATUS_PONG {
                             got_pong = true;
                         } else if buf[1] == CMD_VERSION && n >= 6 {
@@ -108,7 +117,7 @@ impl HidManager {
                         self.device = None;
                         break;
                     }
-                    Ok(_) => {} // timeout or small n
+                    Ok(_) => {} // timeout, small n, or foreign report ID
                 }
             }
         }
@@ -117,7 +126,17 @@ impl HidManager {
 
     pub fn send_ping(&mut self) {
         self.send_report(CMD_PING, 0, 0, 0, 0);
-        self.drain_reads(true, false);
+        let (got_pong, _) = self.drain_reads(true, false);
+        if got_pong {
+            self.missed_pongs = 0;
+        } else if self.device.is_some() {
+            self.missed_pongs += 1;
+            if self.missed_pongs >= MAX_MISSED_PONGS {
+                eprintln!("[HidManager] No PONG for {} consecutive pings; treating device as disconnected", self.missed_pongs);
+                self.device = None;
+                self.missed_pongs = 0;
+            }
+        }
     }
 
     pub fn send_color_command(&mut self, cmd_id: u8, r: u8, g: u8, b: u8) {

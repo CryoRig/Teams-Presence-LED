@@ -9,6 +9,7 @@ use tempfile::Builder;
 use ureq::tls::{RootCerts, TlsConfig};
 
 const GITHUB_REPO: &str = "CryoRig/Teams-Presence-LED";
+pub const GITHUB_REPO_URL: &str = "https://github.com/CryoRig/Teams-Presence-LED";
 
 #[derive(Debug, Clone, Deserialize)]
 struct GithubAsset {
@@ -27,7 +28,7 @@ struct GithubRelease {
 pub struct ReleaseInfo {
     pub version: Version,
     pub firmware_version: Version,
-    pub firmware_download_url_esp32: Option<String>,
+    pub firmware_download_url: Option<String>,
     pub firmware_sha256sums_url: Option<String>,
     pub html_url: String,
 }
@@ -75,13 +76,13 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
 
     let version = parse_tag_to_semver(&response.tag_name)?;
 
-    let mut firmware_download_url_esp32 = None;
+    let mut firmware_download_url = None;
     let mut firmware_sha256sums_url = None;
     let mut manifest_url = None;
 
     for asset in response.assets {
         if asset.name == "seeed_xiao_esp32s3.bin" || asset.name == "firmware.bin" {
-            firmware_download_url_esp32 = Some(asset.browser_download_url);
+            firmware_download_url = Some(asset.browser_download_url);
         } else if asset.name.eq_ignore_ascii_case("SHA256SUMS") || asset.name.ends_with(".sha256") {
             firmware_sha256sums_url = Some(asset.browser_download_url);
         } else if asset.name == "manifest.json" {
@@ -103,7 +104,7 @@ pub fn fetch_latest_release() -> Result<ReleaseInfo, Box<dyn Error>> {
     Ok(ReleaseInfo {
         version: br_ver,
         firmware_version: fw_ver,
-        firmware_download_url_esp32,
+        firmware_download_url,
         firmware_sha256sums_url,
         html_url: response.html_url,
     })
@@ -141,16 +142,10 @@ fn asset_name_from_url(url: &str) -> Result<String, Box<dyn Error>> {
     Ok(name.to_string())
 }
 
-fn verify_firmware_magic(url: &str, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
-    let lower = url.to_ascii_lowercase();
-    if lower.ends_with(".bin") {
-        if bytes.first().copied() != Some(0xE9) {
-            return Err("Downloaded .bin does not look like a valid ESP image (missing 0xE9 magic)".into());
-        }
-    } else if lower.ends_with(".uf2")
-        && (bytes.len() < 4 || &bytes[0..4] != b"UF2\n") {
-            return Err("Downloaded .uf2 does not contain UF2 magic header".into());
-        }
+fn verify_firmware_magic(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    if bytes.first().copied() != Some(0xE9) {
+        return Err("Downloaded .bin does not look like a valid ESP image (missing 0xE9 magic)".into());
+    }
     Ok(())
 }
 
@@ -206,7 +201,7 @@ pub fn download_firmware(url: &str, sha256sums_url: Option<&str>) -> Result<Path
     let mut bytes = Vec::new();
     response.into_body().as_reader().read_to_end(&mut bytes)?;
 
-    verify_firmware_magic(url, &bytes)?;
+    verify_firmware_magic(&bytes)?;
 
     let sums_url = sha256sums_url.ok_or("Release is missing SHA256SUMS asset; refusing unverified firmware download")?;
     verify_firmware_sha256(url, sums_url, &bytes)?;

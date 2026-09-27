@@ -4,16 +4,39 @@ use std::path::Path;
 use espflash::flasher::Flasher;
 use espflash::target::ProgressCallbacks;
 use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
-use serialport::{available_ports, SerialPortType, UsbPortInfo};
+use serialport::{available_ports, SerialPortInfo, SerialPortType, UsbPortInfo};
+
+// Espressif USB-Serial/JTAG (ROM bootloader) identifiers
+const ESP_USB_VID: u16 = 0x303a;
+const ESP_USB_JTAG_PID: u16 = 0x1001;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlashStage {
-    Connecting,
+    Downloading,
+    WaitingForDevice,
+    Connecting { port: String },
     Erasing,
     Flashing { percent: u8 },
     Verifying,
     Resetting,
+    WaitingForReconnect,
     Done,
     Error(String),
+}
+
+fn is_esp_bootloader_port(port: &SerialPortInfo) -> bool {
+    matches!(&port.port_type, SerialPortType::UsbPort(info) if info.vid == ESP_USB_VID && info.pid == ESP_USB_JTAG_PID)
+}
+
+/// Names of all currently present ESP USB-Serial/JTAG ports. Taken before entering
+/// bootloader mode so the flasher can restrict itself to the port that newly appears.
+pub fn list_esp_ports() -> Vec<String> {
+    available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(is_esp_bootloader_port)
+        .map(|p| p.port_name)
+        .collect()
 }
 
 struct ProgressTracker<'a, F>
@@ -49,44 +72,55 @@ where
     }
 }
 
+/// Flashes `firmware_path` to the app partition of the ESP32-S3 that is in ROM bootloader mode.
+/// `exclude_ports` lists ESP ports that existed *before* the bootloader command was sent;
+/// only a port not in that list is accepted, so an unrelated ESP board is never flashed.
 pub fn flash_firmware_esp32(
     firmware_path: &Path,
+    exclude_ports: &[String],
     progress_cb: impl Fn(FlashStage) + Send,
 ) -> Result<(), Box<dyn Error>> {
-    progress_cb(FlashStage::Connecting);
+    progress_cb(FlashStage::WaitingForDevice);
 
-    // 1. Scan serial ports for the ESP32-S3 in bootloader mode (VID: 0x303a).
+    // 1. Scan serial ports for the ESP32-S3 in bootloader mode.
     // After sending the bootloader command via HID, the device re-enumerates as
     // a USB-CDC/JTAG device. On Windows this can take several seconds, so we
     // poll with retries for up to 20 s instead of doing a single scan.
     let port_info = {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut found = None;
-        eprintln!("[Flasher] Waiting for ESP32-S3 (VID: 0x303a) to enumerate...");
+        eprintln!("[Flasher] Waiting for ESP32-S3 (VID 0x{:04x} PID 0x{:04x}) to enumerate...", ESP_USB_VID, ESP_USB_JTAG_PID);
         while std::time::Instant::now() < deadline {
-            if let Ok(ports) = available_ports() {
-                for port in ports {
-                    if let SerialPortType::UsbPort(ref info) = port.port_type {
-                        eprintln!("[Flasher] Found USB port: {} (VID: 0x{:04x}, PID: 0x{:04x})", port.port_name, info.vid, info.pid);
-                        if info.vid == 0x303a {
-                            found = Some(port);
-                            break;
-                        }
-                    }
+            let candidates: Vec<SerialPortInfo> = available_ports()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(is_esp_bootloader_port)
+                .filter(|p| !exclude_ports.contains(&p.port_name))
+                .collect();
+            match candidates.len() {
+                0 => {}
+                1 => {
+                    found = candidates.into_iter().next();
+                    break;
                 }
-            }
-            if found.is_some() {
-                break;
+                n => {
+                    let names: Vec<&str> = candidates.iter().map(|p| p.port_name.as_str()).collect();
+                    return Err(format!(
+                        "{} ESP devices in bootloader mode found ({}); refusing to guess which one to flash. Disconnect the others and retry.",
+                        n, names.join(", ")
+                    ).into());
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         match found {
             Some(p) => {
-                eprintln!("[Flasher] Match found! Waiting 1.5s for Windows driver to settle...");
+                eprintln!("[Flasher] Using {}. Waiting 1.5s for Windows driver to settle...", p.port_name);
+                progress_cb(FlashStage::Connecting { port: p.port_name.clone() });
                 std::thread::sleep(std::time::Duration::from_millis(1500));
                 p
             },
-            None => return Err("ESP32-S3 serial port (VID 0x303a) not found after 20 s. Is the device connected and in bootloader mode?".into()),
+            None => return Err("ESP32-S3 bootloader serial port not found after 20 s. Is the device connected and in bootloader mode?".into()),
         }
     };
 
@@ -98,8 +132,8 @@ pub fn flash_firmware_esp32(
     let usb_info = match port_info.port_type {
         SerialPortType::UsbPort(info) => info,
         _ => UsbPortInfo {
-            vid: 0x303a,
-            pid: 0x1001,
+            vid: ESP_USB_VID,
+            pid: ESP_USB_JTAG_PID,
             serial_number: None,
             manufacturer: None,
             product: None,
@@ -147,9 +181,6 @@ pub fn flash_firmware_esp32(
     drop(flasher);
 
     progress_cb(FlashStage::Done);
-    
-    // 6. Clean up firmware file
-    let _ = std::fs::remove_file(firmware_path);
 
     Ok(())
 }

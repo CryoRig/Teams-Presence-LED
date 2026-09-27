@@ -1,12 +1,13 @@
 use eframe::egui;
 use std::sync::{Arc, Mutex};
+use crate::LockOrRecover;
 use crate::config::{Config, ColorCommand};
 
 pub struct TeamsBridgeApp {
     config: Arc<Mutex<Config>>,
     local_config: Config,
     #[allow(dead_code)]
-    tray_icon: tray_icon::TrayIcon,
+    tray_icon: Option<tray_icon::TrayIcon>,
     is_first_frame: bool,
     status: Arc<Mutex<crate::AppStatus>>,
     last_status: crate::AppStatus,
@@ -35,7 +36,7 @@ impl TeamsBridgeApp {
         bootloader_trigger: Arc<std::sync::atomic::AtomicBool>,
         update_ui_state: Arc<Mutex<crate::update_ui::UpdateUiState>>,
     ) -> Self {
-        let local_config = config.lock().unwrap().clone();
+        let local_config = config.lock_or_recover().clone();
 
         let tray_menu = tray_icon::menu::Menu::new();
         let esp_status_item = tray_icon::menu::MenuItem::with_id("esp_status", "ESP32: Disconnected", false, None);
@@ -46,20 +47,35 @@ impl TeamsBridgeApp {
             &esp_status_item,
             &teams_status_item,
             &tray_icon::menu::PredefinedMenuItem::separator(),
-            // TODO: The update menu was temporarily hidden by request because it's
-            // currently not useful. Uncomment the lines below to reactivate it.
-            // &update_item,
-            // &tray_icon::menu::PredefinedMenuItem::separator(),
+            &update_item,
+            &tray_icon::menu::PredefinedMenuItem::separator(),
             &quit_i,
         ]);
 
-        let tray_icon = tray_icon::TrayIconBuilder::new()
-            .with_menu(Box::new(tray_menu))
-            .with_menu_on_left_click(false)
-            .with_tooltip("Teams Presence Bridge")
-            .with_icon(crate::create_dummy_icon())
-            .build()
-            .unwrap();
+        // At logon the shell's notification area may not exist yet; retry before giving up.
+        let mut tray_icon = None;
+        for attempt in 0..30 {
+            match tray_icon::TrayIconBuilder::new()
+                .with_menu(Box::new(tray_menu.clone()))
+                .with_menu_on_left_click(false)
+                .with_tooltip("Teams Presence Bridge")
+                .with_icon(crate::create_dummy_icon())
+                .build()
+            {
+                Ok(icon) => {
+                    tray_icon = Some(icon);
+                    break;
+                }
+                Err(e) => {
+                    eprintln!("[UI] Tray icon creation failed (attempt {}): {}", attempt + 1, e);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+        if tray_icon.is_none() {
+            eprintln!("[UI] Tray icon unavailable; showing settings window instead");
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
             
         let ctx = cc.egui_ctx.clone();
         std::thread::spawn(move || {
@@ -81,10 +97,14 @@ impl TeamsBridgeApp {
             let receiver = tray_icon::menu::MenuEvent::receiver();
             while let Ok(event) = receiver.recv() {
                 if event.id.0 == "quit" {
+                    if menu_update_state.lock_or_recover().flash_in_progress {
+                        eprintln!("[UI] Quit ignored: firmware flash in progress");
+                        continue;
+                    }
                     shutdown_quit.store(true, std::sync::atomic::Ordering::Relaxed);
                     ctx_menu.send_viewport_cmd(egui::ViewportCommand::Close);
                 } else if event.id.0 == "updates" {
-                    menu_update_state.lock().unwrap().show_window = true;
+                    menu_update_state.lock_or_recover().show_window = true;
                     ctx_menu.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx_menu.send_viewport_cmd(egui::ViewportCommand::Focus);
                     ctx_menu.request_repaint();
@@ -119,12 +139,12 @@ impl eframe::App for TeamsBridgeApp {
         let ctx = ui.ctx().clone();
 
         // --- Status Update Logic ---
-        let current_status = self.status.lock().unwrap().clone();
+        let current_status = self.status.lock_or_recover().clone();
         
         // Sync firmware version from status to update state
         if let Some(fw_ver_tuple) = current_status.firmware_version {
             if let Ok(fw_semver) = semver::Version::parse(&format!("{}.{}.{}", fw_ver_tuple.0, fw_ver_tuple.1, fw_ver_tuple.2)) {
-                let mut state = self.update_ui_state.lock().unwrap();
+                let mut state = self.update_ui_state.lock_or_recover();
                 let new_fw_state = Some((fw_semver.clone(), fw_ver_tuple.3));
                 if state.firmware_current != new_fw_state {
                     state.firmware_current = new_fw_state.clone();
@@ -133,20 +153,20 @@ impl eframe::App for TeamsBridgeApp {
                         state.firmware_update_available = res.firmware_update_available;
                         
                         let update_avail = state.bridge_update_available || res.firmware_update_available;
-                        self.status.lock().unwrap().update_available = update_avail;
+                        self.status.lock_or_recover().update_available = update_avail;
                     }
                 }
             }
         } else {
-            let mut state = self.update_ui_state.lock().unwrap();
+            let mut state = self.update_ui_state.lock_or_recover();
             if state.firmware_current.is_some() {
                 state.firmware_current = None;
                 state.firmware_update_available = false;
-                self.status.lock().unwrap().update_available = state.bridge_update_available;
+                self.status.lock_or_recover().update_available = state.bridge_update_available;
             }
         }
 
-        let current_status = self.status.lock().unwrap().clone(); // Re-read since we might have updated update_available
+        let current_status = self.status.lock_or_recover().clone(); // Re-read since we might have updated update_available
         if current_status != self.last_status {
             if current_status.esp_connected {
                 self.esp_status_item.set_text("ESP32: Connected (USB HID)");
@@ -171,7 +191,9 @@ impl eframe::App for TeamsBridgeApp {
         // ---------------------------
         
         if self.is_first_frame {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.tray_icon.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            }
             self.is_first_frame = false;
         }
 
@@ -202,13 +224,13 @@ impl eframe::App for TeamsBridgeApp {
                         ui.end_row();
 
                         ui.label("Poll Interval (ms):");
-                        if ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(100..=10000)).changed() {
+                        if ui.add(egui::DragValue::new(&mut self.local_config.poll_interval_ms).speed(100.0).range(crate::config::MIN_POLL_INTERVAL_MS..=crate::config::MAX_POLL_INTERVAL_MS)).changed() {
                             self.config_dirty = true;
                         }
                         ui.end_row();
 
                         ui.label("Ping Interval (ms):");
-                        if ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(1000..=60000)).changed() {
+                        if ui.add(egui::DragValue::new(&mut self.local_config.ping_interval_ms).speed(1000.0).range(crate::config::MIN_PING_INTERVAL_MS..=crate::config::MAX_PING_INTERVAL_MS)).changed() {
                             self.config_dirty = true;
                         }
                         ui.end_row();
@@ -229,7 +251,7 @@ impl eframe::App for TeamsBridgeApp {
                     self.config_dirty = true;
                     // Live preview: immediately push brightness to shared config
                     // so the bridge loop picks it up and sends to ESP
-                    self.config.lock().unwrap().brightness = new_brightness;
+                    self.config.lock_or_recover().brightness = new_brightness;
                 }
 
                 let mut transition_val = self.local_config.transition_duration_ms as i32;
@@ -241,7 +263,7 @@ impl eframe::App for TeamsBridgeApp {
                     let new_transition = transition_val as u16;
                     self.local_config.transition_duration_ms = new_transition;
                     self.config_dirty = true;
-                    self.config.lock().unwrap().transition_duration_ms = new_transition;
+                    self.config.lock_or_recover().transition_duration_ms = new_transition;
                 }
 
                 ui.add_space(20.0);
@@ -297,27 +319,40 @@ impl eframe::App for TeamsBridgeApp {
                         eprintln!("Failed to save config: {}", e);
                     } else {
                         // Update shared config
-                        *self.config.lock().unwrap() = self.local_config.clone();
+                        *self.config.lock_or_recover() = self.local_config.clone();
                         self.config_dirty = false;
                         self.last_saved_time = Some(std::time::Instant::now());
+                        ctx.request_repaint_after(std::time::Duration::from_secs(4));
                     }
                 }
 
                 if self.config_dirty {
                     ui.colored_label(egui::Color32::from_rgb(255, 165, 0), "⚠ Unsaved configuration changes");
                 } else if let Some(saved_time) = self.last_saved_time {
-                    if saved_time.elapsed() < std::time::Duration::from_secs(4) {
+                    let elapsed = saved_time.elapsed();
+                    if elapsed < std::time::Duration::from_secs(4) {
                         ui.colored_label(egui::Color32::from_rgb(0, 200, 0), "✔ Configuration saved successfully");
+                        ctx.request_repaint_after(std::time::Duration::from_secs(4) - elapsed);
                     }
                 }
 
                 ui.add_space(15.0);
+                ui.separator();
+                ui.vertical_centered(|ui| {
+                    ui.hyperlink_to(
+                        egui::RichText::new(format!("Teams Presence Bridge v{}  ·  Sim-Lab", env!("CARGO_PKG_VERSION"))).small(),
+                        crate::updater::GITHUB_REPO_URL,
+                    )
+                    .on_hover_text(crate::updater::GITHUB_REPO_URL);
+                });
+                ui.add_space(5.0);
             });
         });
 
         crate::update_ui::render(
             &ctx,
             &self.update_ui_state,
+            &self.status,
             &self.flash_pause_flag,
             &self.bootloader_trigger,
             current_status.esp_connected,

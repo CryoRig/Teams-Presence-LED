@@ -1,10 +1,17 @@
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 use eframe::egui;
 use semver::Version;
+use crate::{AppStatus, LockOrRecover};
 use crate::updater;
 use crate::flasher::FlashStage;
+
+// Bridge loop retries HID init every 5 s; allow a few attempts after the post-flash reset.
+const RECONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+// Hardware variant byte reported by the firmware VERSION response (protocol.md).
+const HW_VARIANT_XIAO_ESP32S3: u8 = 1;
 
 pub struct UpdateUiState {
     pub show_window: bool,
@@ -39,12 +46,13 @@ impl UpdateUiState {
 pub fn render(
     ctx: &egui::Context,
     state: &Arc<Mutex<UpdateUiState>>,
+    status: &Arc<Mutex<AppStatus>>,
     flash_pause_flag: &Arc<AtomicBool>,
     bootloader_trigger: &Arc<AtomicBool>,
     esp_connected: bool,
 ) {
     let mut show_win = {
-        let s = state.lock().unwrap();
+        let s = state.lock_or_recover();
         s.show_window
     };
 
@@ -53,7 +61,7 @@ pub fn render(
     }
 
     let flash_in_progress = {
-        let s = state.lock().unwrap();
+        let s = state.lock_or_recover();
         s.flash_in_progress
     };
 
@@ -72,7 +80,7 @@ pub fn render(
         let mut flash_now = false;
 
         {
-            let s = state.lock().unwrap();
+            let s = state.lock_or_recover();
             
             ui.vertical(|ui| {
                 ui.heading("Teams Presence Bridge Updates");
@@ -103,10 +111,10 @@ pub fn render(
 
                 // --- Firmware Section ---
                 ui.group(|ui| {
-                    ui.label("ESP32 Firmware");
+                    ui.label("ESP32-S3 Firmware");
                     ui.horizontal(|ui| {
                         match &s.firmware_current {
-                            Some((v, variant)) => ui.label(format!("Current version: v{} (Variant {})", v, variant)),
+                            Some((v, _)) => ui.label(format!("Current version: v{}", v)),
                             None => ui.label("Current version: Unknown (Device disconnected)"),
                         };
                         if s.firmware_update_available {
@@ -116,7 +124,7 @@ pub fn render(
 
                     if let Some(ref latest) = s.latest_release {
                         let has_fw_url = match &s.firmware_current {
-                            Some((_, 1)) => latest.firmware_download_url_esp32.is_some(),
+                            Some((_, HW_VARIANT_XIAO_ESP32S3)) => latest.firmware_download_url.is_some(),
                             _ => false,
                         };
                         if has_fw_url {
@@ -146,11 +154,14 @@ pub fn render(
                     ui.add_space(5.0);
                     
                     let stage_text = match &s.flash_stage {
-                        Some(FlashStage::Connecting) => "Downloading firmware...".to_string(),
-                        Some(FlashStage::Erasing) => "Connecting & Erasing flash...".to_string(),
+                        Some(FlashStage::Downloading) => "Downloading firmware...".to_string(),
+                        Some(FlashStage::WaitingForDevice) => "Waiting for device in bootloader mode...".to_string(),
+                        Some(FlashStage::Connecting { port }) => format!("Connecting to {}...", port),
+                        Some(FlashStage::Erasing) => "Erasing flash...".to_string(),
                         Some(FlashStage::Flashing { percent }) => format!("Flashing firmware... {}%", percent),
                         Some(FlashStage::Verifying) => "Verifying flash...".to_string(),
                         Some(FlashStage::Resetting) => "Resetting ESP32 device...".to_string(),
+                        Some(FlashStage::WaitingForReconnect) => "Waiting for device to reconnect...".to_string(),
                         Some(FlashStage::Done) => "Done!".to_string(),
                         Some(FlashStage::Error(err)) => format!("Error: {}", err),
                         None => "Initializing...".to_string(),
@@ -160,7 +171,7 @@ pub fn render(
 
                     let progress = match &s.flash_stage {
                         Some(FlashStage::Flashing { percent }) => *percent as f32 / 100.0,
-                        Some(FlashStage::Done) => 1.0,
+                        Some(FlashStage::Verifying | FlashStage::Resetting | FlashStage::WaitingForReconnect | FlashStage::Done) => 1.0,
                         _ => 0.0,
                     };
 
@@ -196,6 +207,7 @@ pub fn render(
         if flash_now {
             start_firmware_update(
                 state.clone(),
+                status.clone(),
                 flash_pause_flag.clone(),
                 bootloader_trigger.clone(),
                 esp_connected,
@@ -205,14 +217,14 @@ pub fn render(
     });
 
     if !flash_in_progress {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock_or_recover();
         s.show_window = show_win;
     }
 }
 
 pub fn trigger_update_check(state: Arc<Mutex<UpdateUiState>>, ctx: egui::Context) {
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock_or_recover();
         s.checking = true;
         s.error_message = None;
     }
@@ -221,7 +233,7 @@ pub fn trigger_update_check(state: Arc<Mutex<UpdateUiState>>, ctx: egui::Context
     thread::spawn(move || {
         match updater::fetch_latest_release() {
             Ok(latest) => {
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock_or_recover();
                 let fw_version_opt = s.firmware_current.clone();
                 let res = updater::check_updates(&s.bridge_current, fw_version_opt.as_ref(), &latest);
                 s.latest_release = Some(latest);
@@ -230,7 +242,7 @@ pub fn trigger_update_check(state: Arc<Mutex<UpdateUiState>>, ctx: egui::Context
                 s.checking = false;
             }
             Err(e) => {
-                let mut s = state.lock().unwrap();
+                let mut s = state.lock_or_recover();
                 s.error_message = Some(format!("Failed to fetch release: {}", e));
                 s.checking = false;
             }
@@ -239,38 +251,50 @@ pub fn trigger_update_check(state: Arc<Mutex<UpdateUiState>>, ctx: egui::Context
     });
 }
 
+fn fail_flash(state: &Arc<Mutex<UpdateUiState>>, ctx: &egui::Context, msg: String, fw_path: Option<&std::path::Path>) {
+    if let Some(p) = fw_path {
+        let _ = std::fs::remove_file(p);
+    }
+    let mut s = state.lock_or_recover();
+    s.flash_in_progress = false;
+    s.flash_stage = Some(FlashStage::Error(msg.clone()));
+    s.error_message = Some(msg);
+    ctx.request_repaint();
+}
+
 fn start_firmware_update(
     state: Arc<Mutex<UpdateUiState>>,
+    status: Arc<Mutex<AppStatus>>,
     flash_pause_flag: Arc<AtomicBool>,
     bootloader_trigger: Arc<AtomicBool>,
     esp_connected: bool,
     ctx: egui::Context,
 ) {
     let latest_release = {
-        let s = state.lock().unwrap();
+        let s = state.lock_or_recover();
         s.latest_release.clone()
     };
 
-    let variant = { let s = state.lock().unwrap(); s.firmware_current.as_ref().map(|(_, v)| *v) };
+    let variant = { let s = state.lock_or_recover(); s.firmware_current.as_ref().map(|(_, v)| *v) };
 
     let (firmware_url, sha256sums_url) = match (latest_release, variant) {
-        (Some(r), Some(1)) => (r.firmware_download_url_esp32, r.firmware_sha256sums_url),
+        (Some(r), Some(HW_VARIANT_XIAO_ESP32S3)) => (r.firmware_download_url, r.firmware_sha256sums_url),
         _ => (None, None),
     };
 
     let firmware_url = match firmware_url {
         Some(url) => url,
         None => {
-            let mut s = state.lock().unwrap();
-            s.error_message = Some("No firmware binary found for your device variant in the latest release.".to_string());
+            let mut s = state.lock_or_recover();
+            s.error_message = Some("No firmware binary for the XIAO ESP32-S3 found in the latest release.".to_string());
             return;
         }
     };
 
     {
-        let mut s = state.lock().unwrap();
+        let mut s = state.lock_or_recover();
         s.flash_in_progress = true;
-        s.flash_stage = Some(FlashStage::Connecting);
+        s.flash_stage = Some(FlashStage::Downloading);
         s.error_message = None;
     }
     ctx.request_repaint();
@@ -283,80 +307,87 @@ fn start_firmware_update(
         let fw_path = match updater::download_firmware(&firmware_url, sha256sums_url.as_deref()) {
             Ok(path) => path,
             Err(e) => {
-                let mut s = state_clone.lock().unwrap();
-                s.flash_in_progress = false;
-                let msg = format!("Download failed: {}", e);
-                s.flash_stage = Some(FlashStage::Error(msg.clone()));
-                s.error_message = Some(msg);
-                ctx_clone.request_repaint();
+                fail_flash(&state_clone, &ctx_clone, format!("Download failed: {}", e), None);
                 return;
             }
         };
 
         // Step 2: Trigger bootloader mode (or just proceed if already disconnected)
-        if esp_connected {
+        // ESP ports present *before* the reset are excluded so only our device can be flashed.
+        let exclude_ports = if esp_connected {
+            let known = crate::flasher::list_esp_ports();
             bootloader_trigger.store(true, Ordering::Relaxed);
 
             // Wait for bridge loop to pause
-            let start = std::time::Instant::now();
+            let start = Instant::now();
             let mut ok = false;
             while start.elapsed().as_secs() < 5 {
                 if flash_pause_flag.load(Ordering::Relaxed) {
                     ok = true;
                     break;
                 }
-                thread::sleep(std::time::Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
             }
 
             if !ok {
-                let mut s = state_clone.lock().unwrap();
-                s.flash_in_progress = false;
-                let msg = "Failed to enter bootloader mode (bridge timed out).".to_string();
-                s.flash_stage = Some(FlashStage::Error(msg.clone()));
-                s.error_message = Some(msg);
-                let _ = std::fs::remove_file(fw_path);
-                ctx_clone.request_repaint();
+                fail_flash(&state_clone, &ctx_clone, "Failed to enter bootloader mode (bridge timed out).".to_string(), Some(&fw_path));
                 return;
             }
+            known
         } else {
             // Not connected via HID, so we assume it might already be in bootloader mode.
             // Directly pause the bridge loop and proceed.
             flash_pause_flag.store(true, Ordering::Relaxed);
-        }
+            Vec::new()
+        };
 
         // Step 3: Flash the firmware
         let state_cb = state_clone.clone();
         let ctx_cb = ctx_clone.clone();
         
-        let flash_res = crate::flasher::flash_firmware_esp32(&fw_path, move |stage| {
-            let mut s = state_cb.lock().unwrap();
+        let flash_res = crate::flasher::flash_firmware_esp32(&fw_path, &exclude_ports, move |stage| {
+            let mut s = state_cb.lock_or_recover();
             s.flash_stage = Some(stage);
             ctx_cb.request_repaint();
         });
+        let _ = std::fs::remove_file(&fw_path);
 
-        match flash_res {
-            Ok(_) => {
-                // Wait 3s for ESP32 to reboot and CDC/HID to re-enumerate
-                thread::sleep(std::time::Duration::from_millis(3000));
-
-                let mut s = state_clone.lock().unwrap();
-                s.flash_in_progress = false;
-                s.flash_stage = None;
-                s.firmware_update_available = false; // Successfully flashed
-                // We don't know the exact firmware version until it re-enumerates and bridge loop queries it,
-                // so we will let the bridge loop update s.firmware_current.
-            }
-            Err(e) => {
-                let mut s = state_clone.lock().unwrap();
-                s.flash_in_progress = false;
-                let msg = format!("Flash failed: {}", e);
-                s.flash_stage = Some(FlashStage::Error(msg.clone()));
-                s.error_message = Some(msg);
-            }
+        if let Err(e) = flash_res {
+            flash_pause_flag.store(false, Ordering::Relaxed);
+            fail_flash(&state_clone, &ctx_clone, format!("Flash failed: {}", e), None);
+            return;
         }
 
-        // Resume bridge loop
+        // Step 4: Resume the bridge loop and confirm the device actually came back via HID.
+        {
+            let mut s = state_clone.lock_or_recover();
+            s.flash_stage = Some(FlashStage::WaitingForReconnect);
+        }
+        ctx_clone.request_repaint();
         flash_pause_flag.store(false, Ordering::Relaxed);
+
+        let start = Instant::now();
+        let mut reconnected = false;
+        while start.elapsed() < RECONNECT_TIMEOUT {
+            if status.lock_or_recover().esp_connected {
+                reconnected = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+
+        let mut s = state_clone.lock_or_recover();
+        s.flash_in_progress = false;
+        s.flash_stage = None;
+        if reconnected {
+            // firmware_current / firmware_update_available are refreshed by ui.rs once the version is re-queried
+            s.error_message = None;
+        } else {
+            s.error_message = Some(
+                "Flash completed, but the device did not reconnect. Please unplug and re-plug the USB cable.".to_string(),
+            );
+        }
+        drop(s);
         ctx_clone.request_repaint();
     });
 }

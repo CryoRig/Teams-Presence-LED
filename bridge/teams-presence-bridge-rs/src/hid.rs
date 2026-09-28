@@ -15,9 +15,38 @@ const CMD_BRIGHTNESS: u8   = 0x06;
 const CMD_TRANSITION: u8   = 0x07;
 const CMD_BOOTLOADER: u8   = 0x09;
 const CMD_VERSION: u8      = 0x0A;
+const CMD_GET_CALIBRATION: u8 = 0x0B;
+const CMD_PREVIEW_CALIBRATION: u8 = 0x0C;
+const CMD_SAVE_CALIBRATION: u8 = 0x0D;
+const CMD_CALIBRATION_TEST: u8 = 0x0E;
 
 // Response status codes
 const STATUS_PONG: u8 = 0x01;
+const STATUS_CALIBRATION: u8 = CMD_GET_CALIBRATION;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CalibrationProfile {
+    pub red_gain: u8,
+    pub green_gain: u8,
+    pub blue_gain: u8,
+    pub gamma_tenths: u8,
+}
+
+impl Default for CalibrationProfile {
+    fn default() -> Self {
+        Self { red_gain: 100, green_gain: 100, blue_gain: 100, gamma_tenths: 10 }
+    }
+}
+
+#[derive(Default)]
+pub struct CalibrationState {
+    pub connected: bool,
+    pub supported: Option<bool>,
+    pub profile: CalibrationProfile,
+    pub preview_pending: bool,
+    pub save_pending: bool,
+    pub test_pending: bool,
+}
 
 // Consecutive pings without PONG before the device is considered gone
 const MAX_MISSED_PONGS: u8 = 3;
@@ -149,6 +178,50 @@ impl HidManager {
 
     pub fn send_transition(&mut self, value: u16) {
         self.send_report(CMD_TRANSITION, (value >> 8) as u8, (value & 0xFF) as u8, 0, 0);
+    }
+
+    pub fn query_calibration(&mut self) -> Option<CalibrationProfile> {
+        self.send_report(CMD_GET_CALIBRATION, 0, 0, 0, 0);
+        let device = self.device.as_ref()?;
+        let mut buf = [0u8; 6];
+        let start = std::time::Instant::now();
+        while start.elapsed().as_millis() < 500 {
+            match device.read_timeout(&mut buf, 20) {
+                Ok(n) if n >= 6 && buf[0] == HID_REPORT_ID_VENDOR => {
+                    if buf[1] == STATUS_CALIBRATION {
+                        return Some(CalibrationProfile {
+                            red_gain: buf[2],
+                            green_gain: buf[3],
+                            blue_gain: buf[4],
+                            gamma_tenths: buf[5],
+                        });
+                    }
+                    if buf[1] == 0xFF {
+                        return None;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[HidManager] Calibration read error: {}", e);
+                    self.device = None;
+                    return None;
+                }
+                Ok(_) => {}
+            }
+        }
+        None
+    }
+
+    pub fn preview_calibration(&mut self, profile: CalibrationProfile) {
+        self.send_report(CMD_PREVIEW_CALIBRATION, profile.red_gain, profile.green_gain,
+                         profile.blue_gain, profile.gamma_tenths);
+    }
+
+    pub fn save_calibration(&mut self) {
+        self.send_report(CMD_SAVE_CALIBRATION, 0, 0, 0, 0);
+    }
+
+    pub fn start_calibration_test(&mut self) {
+        self.send_report(CMD_CALIBRATION_TEST, 0, 0, 0, 0);
     }
 
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {

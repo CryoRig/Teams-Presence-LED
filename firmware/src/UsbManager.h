@@ -4,8 +4,8 @@
 #include "USB.h"
 #include "USBHIDVendor.h"
 
-// Callback function type: receives cmd, p1, p2, p3
-typedef std::function<void(uint8_t, uint8_t, uint8_t, uint8_t)> UsbCommandCallback;
+// Callback function type: receives cmd and four command parameters.
+typedef std::function<void(uint8_t, uint8_t, uint8_t, uint8_t, uint8_t)> UsbCommandCallback;
 
 // Struct to hold exactly the parsed command parameters
 struct HidCommand {
@@ -13,6 +13,7 @@ struct HidCommand {
     uint8_t p1;
     uint8_t p2;
     uint8_t p3;
+    uint8_t p4;
 };
 
 // Subclass USBHIDVendor to intercept packets before TinyUSB queues them
@@ -38,6 +39,9 @@ public:
 
     // Send a standard status response (5-byte report: status, value, padding)
     void sendResponse(uint8_t status, uint8_t value);
+
+    // Send a calibration profile response (5-byte payload).
+    void sendCalibration(uint8_t red, uint8_t green, uint8_t blue, uint8_t gamma);
 
     // Dispatch queued commands to the callback; call from loop()
     void loop();

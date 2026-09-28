@@ -15,7 +15,7 @@ This document defines the binary protocol used for communication between the **T
 ## Command Set (Output Report)
 
 The host sends commands to the device using a 5-byte payload structure:
-`[Command ID] [Param 1] [Param 2] [Param 3] [Reserved]`
+`[Command ID] [Param 1] [Param 2] [Param 3] [Param 4 / Reserved]`
 
 *Note: The ESP32 Arduino Core's `USBHIDVendor` uses Report ID `0x06` (`HID_REPORT_ID_VENDOR`). Depending on the host OS and library (`hidapi`), this Report ID byte (`0x06`) MUST be prepended to the buffer, making the actual transfer 6 bytes. The payload described below refers to the data bytes following the Report ID.*
 
@@ -80,6 +80,27 @@ Queries the firmware version and hardware variant.
 - **Parameters:** `0x00` (ignored)
 - **Response:** Sends an Input Report with Status Code `0x0A` followed by `[Major] [Minor] [Patch] [Variant]`. Variant `1` = Seeed XIAO ESP32-S3 (the only supported hardware); the bridge refuses to offer firmware updates for any other value.
 
+### 0x0B: Get LED Calibration
+Returns the active device calibration profile.
+- **Parameters:** `0x00` (ignored)
+- **Response:** Status `0x0B` followed by `[Red Gain] [Green Gain] [Blue Gain] [Gamma Tenths]`.
+- Gains are percentages from `0` to `200`; `100` is unchanged. Gamma is stored in tenths from `5` to `30`; `10` is neutral (`1.0`).
+
+### 0x0C: Preview LED Calibration
+Applies a profile immediately in RAM. This does not write flash/NVS.
+- **Parameters:** P1-P3 are red, green, and blue gains; P4 is gamma in tenths. Values outside supported ranges are clamped.
+- **Response:** Standard `0x02` OK.
+
+### 0x0D: Save LED Calibration
+Persists the currently previewed profile in the device's NVS. Settings stay with the physical device.
+- **Parameters:** `0x00` (ignored)
+- **Response:** Standard `0x02` OK.
+
+### 0x0E: Calibration Test Pattern
+Shows red, green, blue, then white for 700 ms each using the active calibration profile, then restores the last commanded state.
+- **Parameters:** `0x00` (ignored)
+- **Response:** Standard `0x02` OK.
+
 ## Responses (Input Report)
 
 The device may send an Input Report back to the host, formatted as:
@@ -87,7 +108,10 @@ The device may send an Input Report back to the host, formatted as:
 
 - `0x01`: **PONG** - Response to a PING command.
 - `0x02`: **OK** - Command received and processed successfully.
+- `0x0B`: **CALIBRATION** - Followed by RGB gains and gamma tenths as described above.
 - `0xFF`: **ERROR** - Unknown command ID or invalid data.
+
+Older firmware returns `0xFF` for calibration commands; the bridge treats that as calibration unsupported and continues normal presence control.
 
 ## Error Handling & Edge Cases
 

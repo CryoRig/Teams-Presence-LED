@@ -13,6 +13,7 @@ void CustomUSBHIDVendor::_onOutput(uint8_t report_id, const uint8_t* buffer, uin
         cmd.p1 = buffer[offset + 1];
         cmd.p2 = buffer[offset + 2];
         cmd.p3 = buffer[offset + 3];
+        cmd.p4 = len >= offset + 5 ? buffer[offset + 4] : 0;
         
         if (UsbManager::instance && UsbManager::instance->cmdQueue) {
             // Runs in the TinyUSB task (not an ISR). Bypasses TinyUSB's rx_queue and the
@@ -55,12 +56,17 @@ void UsbManager::sendResponse(uint8_t status, uint8_t value) {
     vendor.write(response, sizeof(response));
 }
 
+void UsbManager::sendCalibration(uint8_t red, uint8_t green, uint8_t blue, uint8_t gamma) {
+    uint8_t response[5] = {0x0B, red, green, blue, gamma};
+    vendor.write(response, sizeof(response));
+}
+
 void UsbManager::loop() {
     HidCommand cmd;
     // Read from our safe queue and dispatch
     while (cmdQueue && xQueueReceive(cmdQueue, &cmd, 0) == pdTRUE) {
         if (cmdCallback) {
-            cmdCallback(cmd.cmd, cmd.p1, cmd.p2, cmd.p3);
+            cmdCallback(cmd.cmd, cmd.p1, cmd.p2, cmd.p3, cmd.p4);
         }
     }
 }

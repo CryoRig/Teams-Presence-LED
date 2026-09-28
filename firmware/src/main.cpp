@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <FastLED.h>
 #include <math.h>
+#include <Preferences.h>
 #include <soc/rtc_cntl_reg.h>
 #include "UsbManager.h"
 
@@ -12,7 +13,7 @@ UsbManager usbManager;
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 6
-#define FW_VERSION_PATCH 0
+#define FW_VERSION_PATCH 2
 // Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
 #define HW_VARIANT 1
 
@@ -31,23 +32,38 @@ UsbManager usbManager;
 #define BREATHE_SPEED_SLOW     0.0209f
 
 CRGB leds[NUM_LEDS];
+CRGB bootColors[NUM_LEDS];
 
 enum State {
     STATE_OFF,
     STATE_SOLID,
     STATE_BREATHE,
     STATE_BREATHE_SLOW,
-    STATE_DISCONNECTED
+    STATE_DISCONNECTED,
+    STATE_CALIBRATION_TEST
 };
+
+struct LedCalibration {
+    uint8_t redGain;
+    uint8_t greenGain;
+    uint8_t blueGain;
+    uint8_t gammaTenths;
+};
+
+static const uint8_t CALIBRATION_SCHEMA = 1;
+static const LedCalibration NEUTRAL_CALIBRATION = {100, 100, 100, 10};
+LedCalibration calibration = NEUTRAL_CALIBRATION;
+Preferences calibrationPreferences;
 
 State currentState = STATE_OFF;
 CRGB targetColor = CRGB::Black;
-CRGB lastHardwareColor = CRGB::Black;
+CRGB lastLogicalColor = CRGB::Black;
 State lastCommandedState = STATE_OFF;
 CRGB lastCommandedColor = CRGB::Black;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
 float breatheAngle = 0.0f;
+unsigned long calibrationTestStart = 0;
 
 // Transition state
 CRGB previousColor = CRGB::Black;
@@ -57,19 +73,76 @@ unsigned int transitionDurationMs = 500;
 
 
 // --- Helper: set all LEDs to a color and show ---
-void showSolid(CRGB color, bool force = false) {
-    // If the requested color is already on the strip, do nothing unless forced
-    if (!force && color == lastHardwareColor) return; 
+LedCalibration calibrationDefaultsForVariant(uint8_t variant) {
+    switch (variant) {
+        case 1: return NEUTRAL_CALIBRATION;
+        default: return NEUTRAL_CALIBRATION;
+    }
+}
 
-    lastHardwareColor = color; // Update the cache
-    fill_solid(leds, NUM_LEDS, color);
+LedCalibration clampCalibration(LedCalibration value) {
+    value.redGain = min(value.redGain, (uint8_t)200);
+    value.greenGain = min(value.greenGain, (uint8_t)200);
+    value.blueGain = min(value.blueGain, (uint8_t)200);
+    value.gammaTenths = constrain(value.gammaTenths, (uint8_t)5, (uint8_t)30);
+    return value;
+}
+
+void loadCalibration() {
+    calibration = calibrationDefaultsForVariant(HW_VARIANT);
+    calibrationPreferences.begin("led-cal", true);
+    if (calibrationPreferences.getUChar("schema", 0) == CALIBRATION_SCHEMA) {
+        calibration.redGain = calibrationPreferences.getUChar("red", calibration.redGain);
+        calibration.greenGain = calibrationPreferences.getUChar("green", calibration.greenGain);
+        calibration.blueGain = calibrationPreferences.getUChar("blue", calibration.blueGain);
+        calibration.gammaTenths = calibrationPreferences.getUChar("gamma", calibration.gammaTenths);
+        calibration = clampCalibration(calibration);
+    }
+    calibrationPreferences.end();
+}
+
+void saveCalibration() {
+    calibration = clampCalibration(calibration);
+    calibrationPreferences.begin("led-cal", false);
+    calibrationPreferences.putUChar("schema", CALIBRATION_SCHEMA);
+    calibrationPreferences.putUChar("red", calibration.redGain);
+    calibrationPreferences.putUChar("green", calibration.greenGain);
+    calibrationPreferences.putUChar("blue", calibration.blueGain);
+    calibrationPreferences.putUChar("gamma", calibration.gammaTenths);
+    calibrationPreferences.end();
+}
+
+CRGB calibratedColor(CRGB color) {
+    color.r = min((uint16_t)255, ((uint16_t)color.r * calibration.redGain + 50) / 100);
+    color.g = min((uint16_t)255, ((uint16_t)color.g * calibration.greenGain + 50) / 100);
+    color.b = min((uint16_t)255, ((uint16_t)color.b * calibration.blueGain + 50) / 100);
+    if (calibration.gammaTenths != 10) {
+        color = applyGamma_video(color, calibration.gammaTenths / 10.0f);
+    }
+    return color;
+}
+
+void showBootColors() {
+    for (int i = 0; i < NUM_LEDS; i++) {
+        leds[i] = calibratedColor(bootColors[i]);
+    }
+    FastLED.show();
+}
+
+// --- Helper: set all LEDs to a color and show ---
+void showSolid(CRGB color, bool force = false) {
+    // Cache logical colors so output correction is never applied cumulatively.
+    if (!force && color == lastLogicalColor) return;
+
+    lastLogicalColor = color; // Update the cache
+    fill_solid(leds, NUM_LEDS, calibratedColor(color));
     FastLED.show();
 }
 
 // --- Helper: start a transition if enabled ---
 void startStateTransition() {
     if (transitionDurationMs > 0) {
-        previousColor = lastHardwareColor;
+        previousColor = lastLogicalColor;
         transitionStartTime = millis();
         isTransitioning = true;
     }
@@ -96,19 +169,19 @@ void bootAnimation() {
         for (int i = 0; i < NUM_LEDS; i++) {
             // Each LED gets a hue offset based on its position + the current frame
             uint8_t hue = (i * 256 / NUM_LEDS) + (f * 4);
-            leds[i] = CHSV(hue, 255, 255);
+            bootColors[i] = CHSV(hue, 255, 255);
         }
-        FastLED.show();
+        showBootColors();
         delay(FRAME_MS);
     }
     // Fade out
     for (int b = 255; b >= 0; b -= 8) {
         FastLED.setBrightness(b);
-        FastLED.show();
+        showBootColors();
         delay(10);
     }
     FastLED.setBrightness(0);
-    FastLED.show();
+    showBootColors();
     // Restore full brightness and clear
     FastLED.setBrightness(BRIGHTNESS);
     showSolid(CRGB::Black, true);
@@ -125,7 +198,7 @@ static void markHostAlive() {
     lastHeartbeat = millis();
 }
 
-void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
+void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
     uint8_t response[2] = {0x02, 0x00}; // OK by default
 
     switch (cmd) {
@@ -166,7 +239,7 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
             break;
         case 0x06: // BRIGHTNESS
             FastLED.setBrightness(p1);
-            showSolid(lastHardwareColor, true); // Re-push the cached color at the new brightness
+            showSolid(lastLogicalColor, true); // Re-push the cached color at the new brightness
             markHostAlive();
             break;
         case 0x07: // TRANSITION
@@ -184,6 +257,26 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3) {
         case 0x0A: // VERSION
             usbManager.sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
             return; // Skip default 2-byte response
+        case 0x0B: // GET_CALIBRATION
+            markHostAlive();
+            usbManager.sendCalibration(calibration.redGain, calibration.greenGain,
+                                       calibration.blueGain, calibration.gammaTenths);
+            return;
+        case 0x0C: // PREVIEW_CALIBRATION
+            calibration = clampCalibration({p1, p2, p3, p4});
+            showSolid(lastLogicalColor, true);
+            markHostAlive();
+            break;
+        case 0x0D: // SAVE_CALIBRATION
+            saveCalibration();
+            markHostAlive();
+            break;
+        case 0x0E: // CALIBRATION_TEST_PATTERN
+            markHostAlive();
+            isTransitioning = false;
+            calibrationTestStart = millis();
+            currentState = STATE_CALIBRATION_TEST;
+            break;
         default:
             response[0] = 0xFF; // ERR
             break;
@@ -198,6 +291,7 @@ void setup() {
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 480mA for USB safety (note: full white will be dimmed by FastLED to meet this budget)
     FastLED.setBrightness(BRIGHTNESS);
+    loadCalibration();
     showSolid(CRGB::Black);
 
     bootAnimation();
@@ -222,7 +316,17 @@ void loop() {
 
         CRGB nextColor = CRGB::Black;
 
-        if (currentState == STATE_BREATHE) {
+        if (currentState == STATE_CALIBRATION_TEST) {
+            const unsigned long elapsed = now - calibrationTestStart;
+            if (elapsed >= 2800) {
+                currentState = lastCommandedState;
+                nextColor = currentState == STATE_OFF ? CRGB::Black : lastCommandedColor;
+            } else {
+                const uint8_t testIndex = elapsed / 700;
+                const CRGB testColors[] = {CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::White};
+                nextColor = testColors[testIndex];
+            }
+        } else if (currentState == STATE_BREATHE) {
             nextColor = getBreatheColor(BREATHE_SPEED_MODERATE, targetColor);
         } else if (currentState == STATE_BREATHE_SLOW) {
             nextColor = getBreatheColor(BREATHE_SPEED_SLOW, targetColor);

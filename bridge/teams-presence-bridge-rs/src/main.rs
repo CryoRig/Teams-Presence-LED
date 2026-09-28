@@ -96,6 +96,10 @@ fn main() -> eframe::Result<()> {
     
     let app_status = Arc::new(Mutex::new(AppStatus::default()));
     let background_status = app_status.clone();
+
+    let calibration_state = Arc::new(Mutex::new(hid::CalibrationState::default()));
+    let background_calibration = calibration_state.clone();
+    let app_calibration = calibration_state.clone();
     
     let shared_ctx: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
     let background_ctx = shared_ctx.clone();
@@ -123,6 +127,7 @@ fn main() -> eframe::Result<()> {
                 run_bridge_loop(
                     background_config.clone(),
                     background_status.clone(),
+                    background_calibration.clone(),
                     background_ctx.clone(),
                     background_shutdown.clone(),
                     background_flash_pause.clone(),
@@ -190,6 +195,7 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(ui::TeamsBridgeApp::new(
                 cc,
                 shared_config,
+                app_calibration,
                 app_status,
                 config_path_str,
                 shutdown_flag,
@@ -215,6 +221,7 @@ pub fn create_dummy_icon() -> tray_icon::Icon {
 fn run_bridge_loop(
     config: Arc<Mutex<Config>>,
     status: Arc<Mutex<AppStatus>>,
+    calibration: Arc<Mutex<hid::CalibrationState>>,
     ctx: Arc<Mutex<Option<egui::Context>>>,
     shutdown_flag: Arc<AtomicBool>,
     flash_pause_flag: Arc<AtomicBool>,
@@ -247,6 +254,18 @@ fn run_bridge_loop(
                 Ok(mut manager) => {
                     let connected = manager.connect();
                     if connected {
+                        let device_calibration = manager.query_calibration();
+                        {
+                            let mut state = calibration.lock_or_recover();
+                            state.connected = true;
+                            state.supported = Some(device_calibration.is_some());
+                            if let Some(profile) = device_calibration {
+                                state.profile = profile;
+                            }
+                            state.preview_pending = false;
+                            state.save_pending = false;
+                            state.test_pending = false;
+                        }
                         let c = config.lock_or_recover();
                         manager.send_brightness(c.brightness);
                         last_sent_brightness = Some(c.brightness);
@@ -300,6 +319,9 @@ fn run_bridge_loop(
             if let Some(h) = hid_manager.as_ref()
                 && !h.is_connected() {
                     hid_manager = None;
+                    let mut state = calibration.lock_or_recover();
+                    state.connected = false;
+                    state.supported = None;
                     continue;
                 }
 
@@ -380,6 +402,31 @@ fn run_bridge_loop(
                 status_changed = true;
             }
         }
+
+        let calibration_actions = {
+            let mut state = calibration.lock_or_recover();
+            if state.connected && state.supported == Some(true) {
+                let actions = (state.preview_pending, state.save_pending, state.test_pending, state.profile);
+                state.preview_pending = false;
+                state.save_pending = false;
+                state.test_pending = false;
+                actions
+            } else {
+                (false, false, false, state.profile)
+            }
+        };
+        if let Some(h) = hid_manager.as_mut()
+            && h.is_connected() {
+                if calibration_actions.0 {
+                    h.preview_calibration(calibration_actions.3);
+                }
+                if calibration_actions.1 {
+                    h.save_calibration();
+                }
+                if calibration_actions.2 {
+                    h.start_calibration_test();
+                }
+            }
         if status_changed
             && let Some(ctx) = ctx.lock_or_recover().as_ref() {
                 ctx.request_repaint();

@@ -55,6 +55,13 @@ Use the command line to run the Rust bridge application. Ensure the firmware is 
    - Right-click the tray icon and verify the context menu shows the ESP32 and Teams status lines, **Check for Updates**, and **Quit**.
    - Left-click the tray icon and verify the settings window opens (Autostart, intervals, brightness, presence mapping).
    - If changes were made to `config.json` logic, verify those settings apply correctly.
+6. **LED Calibration Check:**
+   - With calibration-capable firmware connected, open the settings window and verify the device calibration controls are enabled.
+   - Adjust one RGB balance slider and gamma; verify the active LEDs change immediately without saving.
+   - Select **Show RGB + white test pattern** and verify red, green, blue, and white display in sequence, then the current Teams state returns.
+   - Select **Save to device**, restart or reconnect the device, and verify the calibration values remain active.
+   - Select **Reset to neutral**, verify the output returns to the uncorrected appearance, and reconnect to confirm the neutral profile persisted.
+   - Connect firmware older than calibration support; verify the UI reports unsupported while presence, brightness, transitions, and heartbeat continue working.
 
 ---
 

@@ -5,6 +5,7 @@ use crate::config::{Config, ColorCommand};
 
 pub struct TeamsBridgeApp {
     config: Arc<Mutex<Config>>,
+    calibration: Arc<Mutex<crate::hid::CalibrationState>>,
     local_config: Config,
     #[allow(dead_code)]
     tray_icon: Option<tray_icon::TrayIcon>,
@@ -29,6 +30,7 @@ impl TeamsBridgeApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         config: Arc<Mutex<Config>>,
+        calibration: Arc<Mutex<crate::hid::CalibrationState>>,
         status: Arc<Mutex<crate::AppStatus>>,
         config_path: String,
         shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
@@ -114,6 +116,7 @@ impl TeamsBridgeApp {
             
         Self {
             config,
+            calibration,
             local_config,
             tray_icon,
             is_first_frame: true,
@@ -264,6 +267,45 @@ impl eframe::App for TeamsBridgeApp {
                     self.local_config.transition_duration_ms = new_transition;
                     self.config_dirty = true;
                     self.config.lock_or_recover().transition_duration_ms = new_transition;
+                }
+
+                ui.add_space(20.0);
+                ui.heading("LED Calibration");
+                ui.add_space(5.0);
+                {
+                    let mut calibration = self.calibration.lock_or_recover();
+                    match (calibration.connected, calibration.supported) {
+                        (false, _) => { ui.label("Connect an LED device to calibrate its colors."); }
+                        (true, Some(false)) => { ui.label("Calibration requires newer firmware."); }
+                        (true, _) => {
+                            let mut changed = false;
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.red_gain, 0..=200).text("Red balance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.green_gain, 0..=200).text("Green balance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.blue_gain, 0..=200).text("Blue balance")).changed();
+                            let mut gamma = calibration.profile.gamma_tenths as f32 / 10.0;
+                            if ui.add(egui::Slider::new(&mut gamma, 0.5..=3.0).step_by(0.1).text("Gamma")).changed() {
+                                calibration.profile.gamma_tenths = (gamma * 10.0).round() as u8;
+                                changed = true;
+                            }
+                            if changed {
+                                calibration.preview_pending = true;
+                            }
+                            if ui.button("Show RGB + white test pattern").clicked() {
+                                calibration.test_pending = true;
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.button("Save to device").clicked() {
+                                    calibration.save_pending = true;
+                                }
+                                if ui.button("Reset to neutral").clicked() {
+                                    calibration.profile = crate::hid::CalibrationProfile::default();
+                                    calibration.preview_pending = true;
+                                    calibration.save_pending = true;
+                                }
+                            });
+                            ui.label("Balance: 100% is unchanged. Gamma: 1.0 is neutral.");
+                        }
+                    }
                 }
 
                 ui.add_space(20.0);

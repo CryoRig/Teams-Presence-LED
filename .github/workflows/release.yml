@@ -54,7 +54,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: bridge/teams-presence-bridge-rs
-          cache-targets: false
 
       - name: Build bridge app
         working-directory: bridge/teams-presence-bridge-rs
@@ -76,17 +75,22 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: '3.x'
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: .github/workflows/platformio-requirements.txt
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v6
         with:
-          path: ~/.platformio
-          key: platformio-${{ hashFiles('firmware/platformio.ini') }}
-          restore-keys: platformio-
+          path: |
+            ~/.platformio
+            firmware/.pio/libdeps
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini', '.github/workflows/platformio-requirements.txt') }}
+          restore-keys: |
+            platformio-${{ runner.os }}-
 
       - name: Install PlatformIO
-        run: pip install platformio
+        run: pip install -r .github/workflows/platformio-requirements.txt
 
       - name: Build firmware
         working-directory: firmware

@@ -139,4 +139,4 @@ jobs:
       - name: Upload SHA256SUMS.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} assets/SHA256SUMS.txt --clobber
+        run: gh release upload ${{ github.event.release.tag_name }} assets/SHA256SUMS.txt --repo ${{ github.repository }} --clobber

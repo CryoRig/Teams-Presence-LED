@@ -6,7 +6,7 @@ use eframe::egui;
 use semver::Version;
 use crate::{AppStatus, LockOrRecover};
 use crate::updater;
-use crate::flasher::FlashStage;
+use crate::flasher::{FlashResult, FlashStage};
 
 // Bridge loop retries HID init every 5 s; allow a few attempts after the post-flash reset.
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -128,14 +128,17 @@ pub fn render(
                             _ => false,
                         };
                         if has_fw_url {
-                            if s.firmware_update_available || s.firmware_current.is_none() {
+                            let latest_installed = s.firmware_current.as_ref()
+                                .is_some_and(|(version, _)| *version == latest.firmware_version);
+                            if s.firmware_update_available || latest_installed {
+                                if latest_installed {
+                                    ui.label("Firmware is up to date.");
+                                }
                                 ui.add_space(5.0);
                                 ui.horizontal(|ui| {
-                                    if ui.add_enabled(!s.flash_in_progress, egui::Button::new("Update Firmware")).clicked() {
+                                    let label = if latest_installed { "Reinstall Firmware" } else { "Update Firmware" };
+                                    if ui.add_enabled(!s.flash_in_progress, egui::Button::new(label)).clicked() {
                                         flash_now = true;
-                                    }
-                                    if s.firmware_current.is_none() {
-                                        ui.label("(Ensure device is connected)");
                                     }
                                 });
                             } else {
@@ -277,9 +280,9 @@ fn start_firmware_update(
 
     let variant = { let s = state.lock_or_recover(); s.firmware_current.as_ref().map(|(_, v)| *v) };
 
-    let (firmware_url, sha256sums_url) = match (latest_release, variant) {
-        (Some(r), Some(HW_VARIANT_XIAO_ESP32S3)) => (r.firmware_download_url, r.firmware_sha256sums_url),
-        _ => (None, None),
+    let (firmware_url, sha256sums_url, expected_version) = match (latest_release, variant) {
+        (Some(r), Some(HW_VARIANT_XIAO_ESP32S3)) => (r.firmware_download_url, r.firmware_sha256sums_url, Some(r.firmware_version)),
+        _ => (None, None, None),
     };
 
     let firmware_url = match firmware_url {
@@ -341,6 +344,12 @@ fn start_firmware_update(
             Vec::new()
         };
 
+        {
+            let mut device_status = status.lock_or_recover();
+            device_status.esp_connected = false;
+            device_status.firmware_version = None;
+        }
+
         // Step 3: Flash the firmware
         let state_cb = state_clone.clone();
         let ctx_cb = ctx_clone.clone();
@@ -352,11 +361,15 @@ fn start_firmware_update(
         });
         let _ = std::fs::remove_file(&fw_path);
 
-        if let Err(e) = flash_res {
-            flash_pause_flag.store(false, Ordering::Relaxed);
-            fail_flash(&state_clone, &ctx_clone, format!("Flash failed: {}", e), None);
-            return;
-        }
+        let finalization_error = match flash_res {
+            Ok(FlashResult::Complete) => None,
+            Ok(FlashResult::VerifiedButFinalizationFailed(error)) => Some(error),
+            Err(error) => {
+                flash_pause_flag.store(false, Ordering::Relaxed);
+                fail_flash(&state_clone, &ctx_clone, format!("Flash failed: {error:#}"), None);
+                return;
+            }
+        };
 
         // Step 4: Resume the bridge loop and confirm the device actually came back via HID.
         {
@@ -369,10 +382,15 @@ fn start_firmware_update(
         let start = Instant::now();
         let mut reconnected = false;
         while start.elapsed() < RECONNECT_TIMEOUT {
-            if status.lock_or_recover().esp_connected {
+            let device_status = status.lock_or_recover();
+            if device_status.esp_connected && device_status.firmware_version.is_some_and(|(major, minor, patch, variant)| {
+                variant == HW_VARIANT_XIAO_ESP32S3
+                    && expected_version.as_ref().is_some_and(|version| *version == Version::new(major.into(), minor.into(), patch.into()))
+            }) {
                 reconnected = true;
                 break;
             }
+            drop(device_status);
             thread::sleep(Duration::from_millis(250));
         }
 
@@ -380,12 +398,15 @@ fn start_firmware_update(
         s.flash_in_progress = false;
         s.flash_stage = None;
         if reconnected {
-            // firmware_current / firmware_update_available are refreshed by ui.rs once the version is re-queried
+            if let Some(error) = finalization_error {
+                eprintln!("[Flasher] Firmware version confirmed after ROM finalization error: {error}");
+            }
             s.error_message = None;
         } else {
-            s.error_message = Some(
-                "Flash completed, but the device did not reconnect. Please unplug and re-plug the USB cable.".to_string(),
-            );
+            s.error_message = Some(match finalization_error {
+                Some(error) => format!("Image verified, but ROM finalization failed ({error}) and the expected firmware version did not reconnect. Unplug and re-plug USB, then check the reported version."),
+                None => "Flash completed, but the expected firmware version did not reconnect. Please unplug and re-plug USB, then check the reported version.".to_string(),
+            });
         }
         drop(s);
         ctx_clone.request_repaint();

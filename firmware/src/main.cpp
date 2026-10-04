@@ -5,6 +5,8 @@
 #include <math.h>
 #include <Preferences.h>
 #include <soc/rtc_cntl_reg.h>
+#include <soc/rtc_cntl_struct.h>
+#include <soc/usb_serial_jtag_struct.h>
 #include "UsbManager.h"
 
 UsbManager usbManager;
@@ -62,6 +64,7 @@ State lastCommandedState = STATE_OFF;
 CRGB lastCommandedColor = CRGB::Black;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
+unsigned long lastUsbKeepalive = 0;
 float breatheAngle = 0.0f;
 unsigned long calibrationTestStart = 0;
 
@@ -251,9 +254,17 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             ESP.restart();
             break;
         case 0x09: // BOOTLOADER
+            usbManager.sendResponse(0x02, 0);
+            delay(250);
+            USB_SERIAL_JTAG.conf0.phy_sel = 0;
+            USB_SERIAL_JTAG.conf0.pad_pull_override = 0;
+            USB_SERIAL_JTAG.conf0.dp_pullup = 1;
+            USB_SERIAL_JTAG.conf0.usb_pad_enable = 1;
+            RTCCNTL.usb_conf.sw_hw_usb_phy_sel = 1;
+            RTCCNTL.usb_conf.sw_usb_phy_sel = 0;
             REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-            ESP.restart();
-            break;
+            REG_WRITE(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_SW_SYS_RST);
+            for (;;) delay(1000);
         case 0x0A: // VERSION
             usbManager.sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
             return; // Skip default 2-byte response
@@ -303,6 +314,10 @@ void loop() {
     usbManager.loop();
 
     unsigned long now = millis();
+    if (now - lastUsbKeepalive >= 1000) {
+        lastUsbKeepalive = now;
+        usbManager.sendResponse(0x00, 0);
+    }
 
     // 2. Watchdog Check — any command resets the timer
     if (currentState != STATE_DISCONNECTED && now - lastHeartbeat > WATCHDOG_TIMEOUT) {

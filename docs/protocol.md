@@ -73,6 +73,7 @@ Triggers a software reboot of the ESP32. Intended for development and diagnostic
 Forces the device into ROM bootloader/download mode (ESP32-S3) so the bridge can flash new firmware over USB-Serial/JTAG.
 - **Command ID:** `0x09`
 - **Parameters:** `0x00` (ignored)
+- **Response:** Standard `0x02` OK before HID disconnects and the ROM serial port appears.
 
 ### 0x0A: Version
 Queries the firmware version and hardware variant.
@@ -106,6 +107,7 @@ Shows red, green, blue, then white for 700 ms each using the active calibration 
 The device may send an Input Report back to the host, formatted as:
 `[Status Code] [Data] [Reserved...]`
 
+- `0x00`: **KEEPALIVE** - Unsolicited once per second to keep the HID interface active; hosts ignore it. This does not count as a PONG or reset the device's command watchdog.
 - `0x01`: **PONG** - Response to a PING command.
 - `0x02`: **OK** - Command received and processed successfully.
 - `0x0B`: **CALIBRATION** - Followed by RGB gains and gamma tenths as described above.

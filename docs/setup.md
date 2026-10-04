@@ -15,7 +15,7 @@ This project uses the **Seeed XIAO ESP32-S3**. Its built-in USB-C connector expo
 
 - Product page: [Seeed XIAO ESP32-S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - Upload protocol: `esptool` (via the built-in USB)
-- Framework: Arduino (via PlatformIO `espressif32@7.0.1`)
+- Framework: Arduino (via PlatformIO `espressif32@7.1.3`)
 
 ## Windows USB Driver (One-Time)
 
@@ -52,8 +52,8 @@ cd firmware
 pio run --target upload --upload-port COMx
 ```
 
-> **Note:** If `pio` cannot connect, the device is already in bootloader mode, so a pre-reset is unnecessary:
-> `esptool --chip esp32s3 --port COMx --before no-reset --after hard-reset --no-stub write-flash 0x10000 .pio/build/seeed_xiao_esp32s3/firmware.bin`
+> **Note:** If PlatformIO's automatic reset disrupts a device already in ROM bootloader mode, flash the app without resetting before the connection:
+> `esptool --chip esp32s3 --port COMx --before no_reset --after no_reset write_flash 0x10000 .pio/build/seeed_xiao_esp32s3/firmware.bin`
 >
 > **Note:** On the XIAO ESP32-S3 via native USB, the board may not reset automatically after flashing even if the output says "Hard resetting via RTS pin...". If the new firmware does not start, unplug and re-plug the USB cable.
 

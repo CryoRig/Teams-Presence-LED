@@ -1,4 +1,7 @@
 use hidapi::{HidApi, HidDevice};
+use serialport::SerialPort;
+use std::io::Write;
+use std::time::{Duration, Instant};
 
 // Custom VID/PID for Teams Presence Bridge
 const TARGET_VID: u16 = 0x1209;
@@ -8,6 +11,48 @@ const USAGE_PAGE: u16 = 0xFF00;
 // Report ID must match HID_REPORT_ID_VENDOR from ESP32 Arduino core's USBHID.h
 // Enum: NONE=0, KEYBOARD=1, MOUSE=2, GAMEPAD=3, CONSUMER=4, SYSTEM=5, VENDOR=6
 const HID_REPORT_ID_VENDOR: u8 = 0x06;
+const SERIAL_SYNC: u8 = 0xA5;
+
+fn serial_frame(payload: [u8; 5]) -> [u8; 7] {
+    let mut frame = [SERIAL_SYNC, payload[0], payload[1], payload[2], payload[3], payload[4], 0];
+    frame[6] = frame[..6].iter().fold(0, |checksum, byte| checksum ^ byte);
+    frame
+}
+
+fn decode_serial_frame(frame: &[u8; 7]) -> Option<[u8; 5]> {
+    if frame[0] != SERIAL_SYNC || frame[..6].iter().fold(0, |checksum, byte| checksum ^ byte) != frame[6] {
+        return None;
+    }
+    Some([frame[1], frame[2], frame[3], frame[4], frame[5]])
+}
+
+fn read_serial_frame(port: &mut dyn SerialPort, timeout: Duration) -> Option<[u8; 5]> {
+    let deadline = Instant::now() + timeout;
+    let mut frame = [0u8; 7];
+    let mut received = 0;
+    while Instant::now() < deadline {
+        let mut byte = [0];
+        match port.read(&mut byte) {
+            Ok(1) => {
+                if received == 0 && byte[0] != SERIAL_SYNC {
+                    continue;
+                }
+                frame[received] = byte[0];
+                received += 1;
+                if received == frame.len() {
+                    if let Some(payload) = decode_serial_frame(&frame) {
+                        return Some(payload);
+                    }
+                    received = 0;
+                }
+            }
+            Ok(_) => {},
+            Err(ref error) if error.kind() == std::io::ErrorKind::TimedOut => {},
+            Err(_) => return None,
+        }
+    }
+    None
+}
 
 // Command IDs (mirror firmware)
 const CMD_PING: u8         = 0x01;
@@ -54,22 +99,50 @@ const MAX_MISSED_PONGS: u8 = 3;
 pub struct HidManager {
     api: HidApi,
     device: Option<HidDevice>,
+    serial_port_name: Option<String>,
+    serial: Option<Box<dyn SerialPort>>,
+    serial_version: Option<(u8, u8, u8, u8)>,
     missing_device_logged: bool,
     missed_pongs: u8,
 }
 
 impl HidManager {
-    pub fn new() -> Result<Self, hidapi::HidError> {
+    pub fn new(serial_port_name: Option<String>) -> Result<Self, hidapi::HidError> {
         let api = HidApi::new()?;
         Ok(Self {
             api,
             device: None,
+            serial_port_name,
+            serial: None,
+            serial_version: None,
             missing_device_logged: false,
             missed_pongs: 0,
         })
     }
 
     pub fn connect(&mut self) -> bool {
+        if let Some(port_name) = self.serial_port_name.clone() {
+            match serialport::new(&port_name, 115_200).timeout(Duration::from_millis(20)).open() {
+                Ok(mut port) => {
+                    if let Err(error) = port.write_data_terminal_ready(true) {
+                        eprintln!("[Bridge] Cannot enable DTR on {port_name}: {error}");
+                        return false;
+                    }
+                    self.serial = Some(port);
+                    std::thread::sleep(Duration::from_millis(1800));
+                    self.serial_version = self.query_firmware_version();
+                    if self.serial_version.is_some_and(|version| version.3 == 2) {
+                        eprintln!("[Bridge] Connected to serial LED controller on {port_name}");
+                        return true;
+                    }
+                    eprintln!("[Bridge] No compatible LED controller on {port_name}");
+                    self.serial = None;
+                }
+                Err(error) => eprintln!("[Bridge] Cannot open {port_name}: {error}"),
+            }
+            return false;
+        }
+
         // Refresh device list
         let _ = self.api.refresh_devices();
 
@@ -106,10 +179,21 @@ impl HidManager {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.device.is_some()
+        self.device.is_some() || self.serial.is_some()
+    }
+
+    pub fn supports_esp32_flasher(&self) -> bool {
+        self.device.is_some() && self.serial.is_none()
     }
 
     fn send_report(&mut self, cmd: u8, p1: u8, p2: u8, p3: u8, p4: u8) {
+        if let Some(port) = self.serial.as_mut() {
+            if let Err(error) = port.write_all(&serial_frame([cmd, p1, p2, p3, p4])) {
+                eprintln!("[Bridge] Serial write failed: {error}");
+                self.serial = None;
+            }
+            return;
+        }
         if let Some(ref dev) = self.device {
             // First byte is report ID (must match HID_REPORT_ID_VENDOR = 6)
             let buf = [HID_REPORT_ID_VENDOR, cmd, p1, p2, p3, p4];
@@ -121,6 +205,16 @@ impl HidManager {
     }
 
     fn drain_reads(&mut self, wait_for_pong: bool, wait_for_version: bool) -> (bool, Option<(u8, u8, u8, u8)>) {
+        if let Some(port) = self.serial.as_mut() {
+            let timeout = if wait_for_version { 500 } else { 100 };
+            let response = read_serial_frame(port.as_mut(), Duration::from_millis(timeout));
+            return match response {
+                Some([STATUS_PONG, ..]) if wait_for_pong => (true, None),
+                Some([CMD_VERSION, major, minor, patch, variant]) if wait_for_version =>
+                    (false, Some((major, minor, patch, variant))),
+                _ => (false, None),
+            };
+        }
         let mut got_pong = false;
         let mut got_version = None;
         if let Some(ref dev) = self.device {
@@ -158,11 +252,13 @@ impl HidManager {
         let (got_pong, _) = self.drain_reads(true, false);
         if got_pong {
             self.missed_pongs = 0;
-        } else if self.device.is_some() {
+        } else if self.is_connected() {
             self.missed_pongs += 1;
             if self.missed_pongs >= MAX_MISSED_PONGS {
                 eprintln!("[HidManager] No PONG for {} consecutive pings; treating device as disconnected", self.missed_pongs);
                 self.device = None;
+            self.serial = None;
+            self.serial_version = None;
                 self.missed_pongs = 0;
             }
         }
@@ -182,6 +278,13 @@ impl HidManager {
 
     pub fn query_calibration(&mut self) -> Option<CalibrationProfile> {
         self.send_report(CMD_GET_CALIBRATION, 0, 0, 0, 0);
+        if let Some(port) = self.serial.as_mut() {
+            return match read_serial_frame(port.as_mut(), Duration::from_millis(500)) {
+                Some([STATUS_CALIBRATION, red_gain, green_gain, blue_gain, gamma_tenths]) =>
+                    Some(CalibrationProfile { red_gain, green_gain, blue_gain, gamma_tenths }),
+                _ => None,
+            };
+        }
         let device = self.device.as_ref()?;
         let mut buf = [0u8; 6];
         let start = std::time::Instant::now();
@@ -225,12 +328,37 @@ impl HidManager {
     }
 
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
+        if let Some(version) = self.serial_version {
+            return Some(version);
+        }
         self.send_report(CMD_VERSION, 0, 0, 0, 0);
         self.drain_reads(false, true).1
     }
 
     pub fn enter_bootloader(&mut self) {
+        if self.serial.is_some() {
+            return;
+        }
         self.send_report(CMD_BOOTLOADER, 0, 0, 0, 0);
         self.device = None;
+    }
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+
+    #[test]
+    fn serial_frame_uses_sync_and_checksum() {
+        assert_eq!(serial_frame([0x0A, 0, 0, 0, 0]), [0xA5, 0x0A, 0, 0, 0, 0, 0xAF]);
+    }
+
+    #[test]
+    fn serial_frame_rejects_corruption() {
+        let frame = serial_frame([0x03, 255, 120, 20, 0]);
+        assert_eq!(decode_serial_frame(&frame), Some([0x03, 255, 120, 20, 0]));
+        let mut corrupted = frame;
+        corrupted[2] ^= 1;
+        assert_eq!(decode_serial_frame(&corrupted), None);
     }
 }

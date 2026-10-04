@@ -250,7 +250,8 @@ fn run_bridge_loop(
 
         if hid_manager.is_none() && now.duration_since(last_hid_init_attempt) >= Duration::from_secs(5) {
             last_hid_init_attempt = now;
-            match HidManager::new() {
+            let serial_port = config.lock_or_recover().serial_port.clone();
+            match HidManager::new(serial_port) {
                 Ok(mut manager) => {
                     let connected = manager.connect();
                     if connected {
@@ -293,6 +294,10 @@ fn run_bridge_loop(
 
         // Check if we need to put the device into bootloader mode
         if bootloader_trigger.load(Ordering::Relaxed) {
+            if hid_manager.as_ref().is_some_and(|h| h.is_connected() && !h.supports_esp32_flasher()) {
+                bootloader_trigger.store(false, Ordering::Relaxed);
+                continue;
+            }
             if hid_manager.as_ref().is_some_and(|h| h.is_connected()) {
                 eprintln!("[Bridge] Entering bootloader mode as requested...");
                 if let Some(h) = hid_manager.as_mut() {

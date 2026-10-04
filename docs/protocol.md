@@ -2,6 +2,11 @@
 
 This document defines the binary protocol used for communication between the **Teams Presence Bridge** and the **LED Indicator** (ESP32). Communication has been migrated from serial CDC to a custom USB HID interface.
 
+Alternative board firmware uses an opt-in framed serial transport instead of
+USB HID. Its five-byte command/response payloads reuse the command IDs below;
+see [Boards on Hand](available-boards.md) for framing, connection, and feature
+differences. The original ESP32-S3 HID protocol remains unchanged.
+
 ## Communication Parameters
 
 - **Interface:** USB HID (Vendor Defined)

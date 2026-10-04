@@ -125,13 +125,33 @@ pub fn check_updates(
     // 1. ESP is connected (we have a firmware version)
     // 2. The latest version is greater than current firmware version
     let firmware_update_available = match firmware_current {
-        Some((fw_ver, _)) => latest.firmware_version > *fw_ver,
+        Some((fw_ver, 1)) => latest.firmware_version > *fw_ver,
         None => false,
+        _ => false,
     };
 
     UpdateCheckResult {
         bridge_update_available,
         firmware_update_available,
+    }
+}
+
+#[cfg(test)]
+mod variant_tests {
+    use super::*;
+
+    #[test]
+    fn only_xiao_esp32s3_receives_firmware_update() {
+        let release = ReleaseInfo {
+            version: Version::new(1, 0, 0),
+            firmware_version: Version::new(1, 0, 0),
+            firmware_download_url: None,
+            firmware_sha256sums_url: None,
+            html_url: String::new(),
+        };
+        let old_firmware = Version::new(0, 6, 2);
+        assert!(check_updates(&release.version, Some(&(old_firmware.clone(), 1)), &release).firmware_update_available);
+        assert!(!check_updates(&release.version, Some(&(old_firmware, 2)), &release).firmware_update_available);
     }
 }
 

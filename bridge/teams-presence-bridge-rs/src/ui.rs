@@ -172,9 +172,13 @@ impl eframe::App for TeamsBridgeApp {
         let current_status = self.status.lock_or_recover().clone(); // Re-read since we might have updated update_available
         if current_status != self.last_status {
             if current_status.esp_connected {
-                self.esp_status_item.set_text("ESP32: Connected (USB HID)");
+                if let Some(port) = self.local_config.serial_port.as_deref() {
+                    self.esp_status_item.set_text(&format!("LED: Connected ({port})"));
+                } else {
+                    self.esp_status_item.set_text("ESP32: Connected (USB HID)");
+                }
             } else {
-                self.esp_status_item.set_text("ESP32: Disconnected");
+                self.esp_status_item.set_text("LED: Disconnected");
             }
 
             if current_status.teams_parsing {

@@ -16,6 +16,8 @@ pub struct Config {
     pub poll_interval_ms: u64,
     #[serde(default = "default_ping_interval")]
     pub ping_interval_ms: u64,
+    #[serde(default)]
+    pub serial_port: Option<String>,
     #[serde(default = "default_brightness")]
     pub brightness: u8,
     #[serde(default = "default_transition")]
@@ -69,6 +71,7 @@ impl Default for Config {
         Self {
             poll_interval_ms: default_poll_interval(),
             ping_interval_ms: default_ping_interval(),
+            serial_port: None,
             brightness: default_brightness(),
             transition_duration_ms: default_transition(),
             presence_map,
@@ -172,10 +175,21 @@ mod tests {
         fs::write(&path, r#"{ "pingIntervalMs": 0, "pollIntervalMs": 999999 }"#).unwrap();
 
         let loaded = load_config(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.serial_port, None);
         assert_eq!(loaded.ping_interval_ms, MIN_PING_INTERVAL_MS);
         assert_eq!(loaded.poll_interval_ms, MAX_POLL_INTERVAL_MS);
         assert_eq!(loaded.watchdog.command, "BREATHE_SLOW");
         assert!(loaded.presence_map.contains_key("Offline"));
+    }
+
+    #[test]
+    fn test_serial_port_round_trips() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("serial_config.json");
+        let mut config = Config::default();
+        config.serial_port = Some("COM9".into());
+        save_config(path.to_str().unwrap(), &config).unwrap();
+        assert_eq!(load_config(path.to_str().unwrap()).unwrap().serial_port.as_deref(), Some("COM9"));
     }
 
     #[test]

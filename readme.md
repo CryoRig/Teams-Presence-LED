@@ -22,6 +22,8 @@ This project consists of two parts:
 ## Documentation
 
 - [Protocol Specification](docs/protocol.md) - Details the USB HID binary protocol used for communication between the bridge and firmware.
+- [Alternative MCU Candidates](docs/mcu-options.md) - Development-board and custom-PCB options for future hardware revisions.
+- [Boards on Hand](docs/available-boards.md) - PlatformIO targets and serial wiring for alternative boards.
 
 ## License
 

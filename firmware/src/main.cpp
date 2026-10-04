@@ -116,9 +116,9 @@ void saveCalibration() {
 }
 
 CRGB calibratedColor(CRGB color) {
-    color.r = min((uint16_t)255, ((uint16_t)color.r * calibration.redGain + 50) / 100);
-    color.g = min((uint16_t)255, ((uint16_t)color.g * calibration.greenGain + 50) / 100);
-    color.b = min((uint16_t)255, ((uint16_t)color.b * calibration.blueGain + 50) / 100);
+    color.r = min(255, ((int)color.r * calibration.redGain + 50) / 100);
+    color.g = min(255, ((int)color.g * calibration.greenGain + 50) / 100);
+    color.b = min(255, ((int)color.b * calibration.blueGain + 50) / 100);
     if (calibration.gammaTenths != 10) {
         color = applyGamma_video(color, calibration.gammaTenths / 10.0f);
     }

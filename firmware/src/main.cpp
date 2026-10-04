@@ -15,7 +15,7 @@ UsbManager usbManager;
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 6
-#define FW_VERSION_PATCH 2
+#define FW_VERSION_PATCH 3
 // Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
 #define HW_VARIANT 1
 

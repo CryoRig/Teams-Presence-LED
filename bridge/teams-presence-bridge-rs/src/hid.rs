@@ -38,6 +38,14 @@ impl Default for CalibrationProfile {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq)]
+#[repr(u8)]
+pub enum CalibrationTestPattern {
+    #[default]
+    White = 0,
+    MidGray = 1,
+}
+
 #[derive(Default)]
 pub struct CalibrationState {
     pub connected: bool,
@@ -46,6 +54,7 @@ pub struct CalibrationState {
     pub preview_pending: bool,
     pub save_pending: bool,
     pub test_pending: bool,
+    pub test_pattern: CalibrationTestPattern,
 }
 
 // Consecutive pings without PONG before the device is considered gone
@@ -220,8 +229,8 @@ impl HidManager {
         self.send_report(CMD_SAVE_CALIBRATION, 0, 0, 0, 0);
     }
 
-    pub fn start_calibration_test(&mut self) {
-        self.send_report(CMD_CALIBRATION_TEST, 0, 0, 0, 0);
+    pub fn start_calibration_test(&mut self, pattern: CalibrationTestPattern) {
+        self.send_report(CMD_CALIBRATION_TEST, pattern as u8, 0, 0, 0);
     }
 
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
@@ -232,5 +241,25 @@ impl HidManager {
     pub fn enter_bootloader(&mut self) {
         self.send_report(CMD_BOOTLOADER, 0, 0, 0, 0);
         self.device = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calibration_pattern_selectors_match_firmware_protocol() {
+        assert_eq!(CalibrationTestPattern::White as u8, 0);
+        assert_eq!(CalibrationTestPattern::MidGray as u8, 1);
+    }
+
+    #[test]
+    fn calibration_defaults_to_white_without_pending_actions() {
+        let state = CalibrationState::default();
+        assert!(matches!(state.test_pattern, CalibrationTestPattern::White));
+        assert!(!state.test_pending);
+        assert!(!state.preview_pending);
+        assert!(!state.save_pending);
     }
 }

@@ -406,13 +406,13 @@ fn run_bridge_loop(
         let calibration_actions = {
             let mut state = calibration.lock_or_recover();
             if state.connected && state.supported == Some(true) {
-                let actions = (state.preview_pending, state.save_pending, state.test_pending, state.profile);
+                let actions = (state.preview_pending, state.save_pending, state.test_pending, state.profile, state.test_pattern);
                 state.preview_pending = false;
                 state.save_pending = false;
                 state.test_pending = false;
                 actions
             } else {
-                (false, false, false, state.profile)
+                (false, false, false, state.profile, state.test_pattern)
             }
         };
         if let Some(h) = hid_manager.as_mut()
@@ -424,7 +424,7 @@ fn run_bridge_loop(
                     h.save_calibration();
                 }
                 if calibration_actions.2 {
-                    h.start_calibration_test();
+                    h.start_calibration_test(calibration_actions.4);
                 }
             }
         if status_changed

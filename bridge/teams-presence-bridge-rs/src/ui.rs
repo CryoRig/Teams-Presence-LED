@@ -290,7 +290,14 @@ impl eframe::App for TeamsBridgeApp {
                             if changed {
                                 calibration.preview_pending = true;
                             }
-                            if ui.button("Show RGB + white test pattern").clicked() {
+                            ui.horizontal(|ui| {
+                                let mut pattern_changed = ui.selectable_value(&mut calibration.test_pattern, crate::hid::CalibrationTestPattern::White, "White").changed();
+                                pattern_changed |= ui.selectable_value(&mut calibration.test_pattern, crate::hid::CalibrationTestPattern::MidGray, "Mid-gray").changed();
+                                if pattern_changed {
+                                    calibration.test_pending = true;
+                                }
+                            });
+                            if ui.button("Show calibration pattern").clicked() {
                                 calibration.test_pending = true;
                             }
                             ui.horizontal(|ui| {

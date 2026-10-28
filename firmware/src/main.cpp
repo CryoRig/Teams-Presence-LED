@@ -15,7 +15,7 @@ UsbManager usbManager;
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 6
-#define FW_VERSION_PATCH 3
+#define FW_VERSION_PATCH 4
 // Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
 #define HW_VARIANT 1
 
@@ -62,11 +62,11 @@ CRGB targetColor = CRGB::Black;
 CRGB lastLogicalColor = CRGB::Black;
 State lastCommandedState = STATE_OFF;
 CRGB lastCommandedColor = CRGB::Black;
+CRGB calibrationTestColor = CRGB::White;
 unsigned long lastHeartbeat = 0;
 unsigned long lastFrameTime = 0;
 unsigned long lastUsbKeepalive = 0;
 float breatheAngle = 0.0f;
-unsigned long calibrationTestStart = 0;
 
 // Transition state
 CRGB previousColor = CRGB::Black;
@@ -210,32 +210,40 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             markHostAlive();
             break;
         case 0x02: // OFF
-            startStateTransition();
-            currentState = STATE_OFF;
+            if (currentState != STATE_CALIBRATION_TEST) {
+                startStateTransition();
+                currentState = STATE_OFF;
+            }
             lastCommandedState = STATE_OFF;
             lastCommandedColor = CRGB::Black;
             lastHeartbeat = millis();
             break;
         case 0x03: // SOLID
-            startStateTransition();
+            if (currentState != STATE_CALIBRATION_TEST) {
+                startStateTransition();
+                currentState = STATE_SOLID;
+            }
             targetColor = CRGB(p1, p2, p3);
-            currentState = STATE_SOLID;
             lastCommandedState = STATE_SOLID;
             lastCommandedColor = targetColor;
             lastHeartbeat = millis();
             break;
         case 0x04: // BREATHE
-            startStateTransition();
+            if (currentState != STATE_CALIBRATION_TEST) {
+                startStateTransition();
+                currentState = STATE_BREATHE;
+            }
             targetColor = CRGB(p1, p2, p3);
-            currentState = STATE_BREATHE;
             lastCommandedState = STATE_BREATHE;
             lastCommandedColor = targetColor;
             lastHeartbeat = millis();
             break;
         case 0x05: // BREATHE_SLOW
-            startStateTransition();
+            if (currentState != STATE_CALIBRATION_TEST) {
+                startStateTransition();
+                currentState = STATE_BREATHE_SLOW;
+            }
             targetColor = CRGB(p1, p2, p3);
-            currentState = STATE_BREATHE_SLOW;
             lastCommandedState = STATE_BREATHE_SLOW;
             lastCommandedColor = targetColor;
             lastHeartbeat = millis();
@@ -280,13 +288,19 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             break;
         case 0x0D: // SAVE_CALIBRATION
             saveCalibration();
+            if (currentState == STATE_CALIBRATION_TEST) {
+                startStateTransition();
+                currentState = lastCommandedState;
+                targetColor = lastCommandedColor;
+            }
             markHostAlive();
             break;
         case 0x0E: // CALIBRATION_TEST_PATTERN
             markHostAlive();
             isTransitioning = false;
-            calibrationTestStart = millis();
             currentState = STATE_CALIBRATION_TEST;
+            calibrationTestColor = p1 == 1 ? CRGB(128, 128, 128) : CRGB::White;
+            showSolid(calibrationTestColor, true);
             break;
         default:
             response[0] = 0xFF; // ERR
@@ -332,15 +346,7 @@ void loop() {
         CRGB nextColor = CRGB::Black;
 
         if (currentState == STATE_CALIBRATION_TEST) {
-            const unsigned long elapsed = now - calibrationTestStart;
-            if (elapsed >= 2800) {
-                currentState = lastCommandedState;
-                nextColor = currentState == STATE_OFF ? CRGB::Black : lastCommandedColor;
-            } else {
-                const uint8_t testIndex = elapsed / 700;
-                const CRGB testColors[] = {CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::White};
-                nextColor = testColors[testIndex];
-            }
+            nextColor = calibrationTestColor;
         } else if (currentState == STATE_BREATHE) {
             nextColor = getBreatheColor(BREATHE_SPEED_MODERATE, targetColor);
         } else if (currentState == STATE_BREATHE_SLOW) {

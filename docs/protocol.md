@@ -93,13 +93,13 @@ Applies a profile immediately in RAM. This does not write flash/NVS.
 - **Response:** Standard `0x02` OK.
 
 ### 0x0D: Save LED Calibration
-Persists the currently previewed profile in the device's NVS. Settings stay with the physical device.
+Persists the currently previewed profile in the device's NVS. Settings stay with the physical device. If a calibration test is active, ends it and restores the latest commanded presence state.
 - **Parameters:** `0x00` (ignored)
 - **Response:** Standard `0x02` OK.
 
 ### 0x0E: Calibration Test Pattern
-Shows red, green, blue, then white for 700 ms each using the active calibration profile, then restores the last commanded state.
-- **Parameters:** `0x00` (ignored)
+Shows steady white or mid-gray using the active calibration profile until Save LED Calibration (`0x0D`) is received. Preview changes apply live. Presence commands update the state to restore without interrupting the pattern. The normal communication watchdog still exits the test if the host stops sending commands.
+- **Parameters:** P1 selects the pattern: `0` = white `(255,255,255)`, `1` = mid-gray `(128,128,128)`. Other values fall back to white. P2-P4 are ignored.
 - **Response:** Standard `0x02` OK.
 
 ## Responses (Input Report)

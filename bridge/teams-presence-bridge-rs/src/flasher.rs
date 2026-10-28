@@ -2,8 +2,9 @@ use std::error::Error;
 use std::fs::read;
 use std::path::Path;
 use std::time::Duration;
-use espflash::flasher::Flasher;
-use espflash::target::ProgressCallbacks;
+use espflash::flasher::{Flasher, SpiAttachParams};
+use espflash::image_format::Segment;
+use espflash::target::{Esp32Target, FlashTarget, ProgressCallbacks};
 use espflash::target::Chip;
 use espflash::connection::{Connection, ResetAfterOperation, ResetBeforeOperation};
 use serialport::{available_ports, SerialPortInfo, SerialPortType, UsbPortInfo};
@@ -11,6 +12,7 @@ use serialport::{available_ports, SerialPortInfo, SerialPortType, UsbPortInfo};
 // Espressif USB-Serial/JTAG (ROM bootloader) identifiers
 const ESP_USB_VID: u16 = 0x303a;
 const ESP_USB_JTAG_PID: u16 = 0x1001;
+const ESP_USB_OTG_PID: u16 = 0x0009;
 const RTC_CNTL_OPTION1_REG: u32 = 0x6000_812C;
 const FORCE_DOWNLOAD_BOOT_MASK: u32 = 0x1;
 
@@ -34,10 +36,21 @@ pub enum FlashResult {
 }
 
 fn is_esp_bootloader_port(port: &SerialPortInfo) -> bool {
-    matches!(&port.port_type, SerialPortType::UsbPort(info) if info.vid == ESP_USB_VID && info.pid == ESP_USB_JTAG_PID)
+    matches!(&port.port_type, SerialPortType::UsbPort(info)
+        if info.vid == ESP_USB_VID && matches!(info.pid, ESP_USB_JTAG_PID | ESP_USB_OTG_PID))
 }
 
-/// Names of all currently present ESP USB-Serial/JTAG ports. Taken before entering
+fn ensure_supported_target(chip: Chip, secure_download_mode: bool) -> Result<(), Box<dyn Error>> {
+    if chip != Chip::Esp32s3 {
+        return Err(format!("Expected ESP32-S3, found {chip}; refusing to write lamp firmware to another chip.").into());
+    }
+    if secure_download_mode {
+        return Err("Secure download mode does not support this verified lamp update path; refusing to write.".into());
+    }
+    Ok(())
+}
+
+/// Names of all currently present ESP ROM USB ports. Taken before entering
 /// bootloader mode so the flasher can restrict itself to the port that newly appears.
 pub fn list_esp_ports() -> Vec<String> {
     available_ports()
@@ -164,7 +177,7 @@ pub fn flash_firmware_esp32(
     let port_info = {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut found = None;
-        eprintln!("[Flasher] Waiting for ESP32-S3 (VID 0x{:04x} PID 0x{:04x}) to enumerate...", ESP_USB_VID, ESP_USB_JTAG_PID);
+        eprintln!("[Flasher] Waiting for ESP32-S3 (VID 0x{:04x}, USB Serial/JTAG or USB-OTG ROM) to enumerate...", ESP_USB_VID);
         while std::time::Instant::now() < deadline {
             let candidates: Vec<SerialPortInfo> = available_ports()
                 .unwrap_or_default()
@@ -228,12 +241,15 @@ pub fn flash_firmware_esp32(
 
     let mut flasher = Flasher::connect(
         connection,
-        false, // use_stub: false for stable USB-JTAG ROM bootloader interaction
+        false,
         true, // verify
         false, // skip
         None, // chip auto-detect
         None, // default baud
     )?;
+
+    let chip = flasher.chip();
+    ensure_supported_target(chip, flasher.secure_download_mode())?;
 
     // 4. Read firmware binary
     let binary_data = read(firmware_path)?;
@@ -249,7 +265,18 @@ pub fn flash_firmware_esp32(
 
     progress_cb(FlashStage::Erasing);
 
-    let finalization_error = match flasher.write_bin_to_flash(0x10000, &binary_data, &mut tracker) {
+    let mut data = binary_data;
+    data.resize(data.len().next_multiple_of(4), 0xff);
+    let mut target = Esp32Target::new(Chip::Esp32s3, SpiAttachParams::default(), false, true, false);
+    let connection = flasher.connection();
+    let write_result = (|| {
+        target.begin(connection)?;
+        target.write_segment(connection, Segment { addr: 0x10000, data: data.into() }, &mut tracker)?;
+        connection.write_reg(RTC_CNTL_OPTION1_REG, 0, Some(FORCE_DOWNLOAD_BOOT_MASK))?;
+        target.finish(connection, false)
+    })();
+
+    let finalization_error = match write_result {
         Ok(()) => None,
         Err(error) if tracker.verified => {
             eprintln!("[Flasher] Image verified, but ROM finalization failed: {error:#}");
@@ -273,6 +300,45 @@ pub fn flash_firmware_esp32(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognizes_both_s3_rom_usb_interfaces() {
+        for (vid, pid, expected) in [
+            (ESP_USB_VID, ESP_USB_JTAG_PID, true),
+            (ESP_USB_VID, ESP_USB_OTG_PID, true),
+            (ESP_USB_VID, 0x0005, false),
+            (0x1209, ESP_USB_JTAG_PID, false),
+        ] {
+            let port = SerialPortInfo {
+                port_name: "test-port".to_string(),
+                port_type: SerialPortType::UsbPort(UsbPortInfo {
+                    vid,
+                    pid,
+                    serial_number: None,
+                    manufacturer: None,
+                    product: None,
+                }),
+            };
+            assert_eq!(is_esp_bootloader_port(&port), expected);
+        }
+    }
+
+    #[test]
+    fn lamp_firmware_accepts_only_esp32s3() {
+        assert!(ensure_supported_target(Chip::Esp32s3, false).is_ok());
+        for chip in [Chip::Esp32, Chip::Esp32c6] {
+            let error = ensure_supported_target(chip, false).unwrap_err().to_string();
+            assert!(error.contains("Expected ESP32-S3"));
+            assert!(error.contains("refusing to write"));
+        }
+    }
+
+    #[test]
+    fn secure_download_mode_is_rejected_before_writing() {
+        let error = ensure_supported_target(Chip::Esp32s3, true).unwrap_err().to_string();
+        assert!(error.contains("Secure download mode"));
+        assert!(error.contains("refusing to write"));
+    }
 
     #[test]
     fn transfer_completion_does_not_imply_verification() {

@@ -333,6 +333,9 @@ fn start_firmware_update(
             }
 
             if !ok {
+                // Clear both flags so a late-reacting bridge loop cannot pause itself permanently.
+                bootloader_trigger.store(false, Ordering::Relaxed);
+                flash_pause_flag.store(false, Ordering::Relaxed);
                 fail_flash(&state_clone, &ctx_clone, "Failed to enter bootloader mode (bridge timed out).".to_string(), Some(&fw_path));
                 return;
             }

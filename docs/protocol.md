@@ -85,7 +85,8 @@ Queries the firmware version and hardware variant.
 Returns the active device calibration profile.
 - **Parameters:** `0x00` (ignored)
 - **Response:** Status `0x0B` followed by `[Red Gain] [Green Gain] [Blue Gain] [Gamma Tenths]`.
-- Gains are percentages from `0` to `200`; `100` is unchanged. Gamma is stored in tenths from `5` to `30`; `10` is neutral (`1.0`).
+- Gains are attenuation percentages from `0` to `100`; `100` is unchanged. Gamma is stored in tenths from `5` to `30`; `10` is neutral (`1.0`).
+- Firmware before 0.7.0 accepted gains up to `200`, which only clipped the channel. Such stored profiles are migrated once at boot by scaling all gains so the strongest channel becomes `100` (ratios preserved) and re-saved; values above `100` sent via `0x0C` are clamped to `100`.
 
 ### 0x0C: Preview LED Calibration
 Applies a profile immediately in RAM. This does not write flash/NVS.
@@ -98,8 +99,9 @@ Persists the currently previewed profile in the device's NVS. Settings stay with
 - **Response:** Standard `0x02` OK.
 
 ### 0x0E: Calibration Test Pattern
-Shows steady white or mid-gray using the active calibration profile until Save LED Calibration (`0x0D`) is received. Preview changes apply live. Presence commands update the state to restore without interrupting the pattern. The normal communication watchdog still exits the test if the host stops sending commands.
-- **Parameters:** P1 selects the pattern: `0` = white `(255,255,255)`, `1` = mid-gray `(128,128,128)`. Other values fall back to white. P2-P4 are ignored.
+Shows steady white or mid-gray using the active calibration profile until Save LED Calibration (`0x0D`) or the exit selector below is received. Preview changes apply live. Presence commands update the state to restore without interrupting the pattern. The normal communication watchdog still exits the test if the host stops sending commands.
+- **Parameters:** P1 selects the pattern: `0` = white `(255,255,255)`, `1` = mid-gray `(128,128,128)`, `0xFF` = exit. Other values fall back to white. P2-P4 are ignored.
+- **Exit (`P1 = 0xFF`):** Leaves the test pattern (if active), discards any previewed profile by reloading the saved profile from NVS, and restores the latest commanded presence state. Firmware older than 0.7.0 treats `0xFF` as white.
 - **Response:** Standard `0x02` OK.
 
 ## Responses (Input Report)
@@ -107,9 +109,10 @@ Shows steady white or mid-gray using the active calibration profile until Save L
 The device may send an Input Report back to the host, formatted as:
 `[Status Code] [Data] [Reserved...]`
 
-- `0x00`: **KEEPALIVE** - Unsolicited once per second to keep the HID interface active; hosts ignore it. This does not count as a PONG or reset the device's command watchdog.
+- `0x00`: **KEEPALIVE** - Unsolicited once per second to keep the HID interface active; hosts ignore it. This does not count as a PONG or reset the device's command watchdog. Since firmware 0.7.0 the data byte carries the number of commands dropped from the device's input queue since the previous keepalive (`0` on a healthy link).
 - `0x01`: **PONG** - Response to a PING command.
 - `0x02`: **OK** - Command received and processed successfully.
+- `0x0A`: **VERSION** - Followed by major, minor, patch, and hardware variant.
 - `0x0B`: **CALIBRATION** - Followed by RGB gains and gamma tenths as described above.
 - `0xFF`: **ERROR** - Unknown command ID or invalid data.
 
@@ -117,5 +120,5 @@ Older firmware returns `0xFF` for calibration commands; the bridge treats that a
 
 ## Error Handling & Edge Cases
 
-1. **Loss of Communication:** If the ESP32 does not receive any command (or a `0x01 PING`) for **60 seconds**, it enters "Disconnected State" (a moderate white pulse) to alert the user.
+1. **Loss of Communication:** If the ESP32 does not receive any command for **60 seconds**, it enters "Disconnected State" (a moderate white pulse, crossfaded in using the configured transition) to alert the user. Every command except `0x08 RESET` and `0x09 BOOTLOADER` refreshes this watchdog; the first command after a timeout restores the last commanded presence state.
 2. **Invalid Commands:** Unrecognized command IDs will trigger an `0xFF ERROR` response.

@@ -47,6 +47,7 @@ Re-audit 2026-07-25: every issue re-verified against source; [VERIFIED-2026-07-2
 - FIX: `HidManager::new() -> Result<Self,_>`; retry/report in bridge loop. Audit `.unwrap()` on mutexes (25+ sites) or accept as invariant and document.
 - STATUS: fixed in bridge/teams-presence-bridge-rs/src/hid.rs and src/main.rs (HidManager::new now returns Result; bridge loop retries HID init every 5s and logs failures instead of aborting process).
 - VERIFIED: 2026-07-25 — hid.rs:30 `new() -> Result<Self, hidapi::HidError>`; main.rs bridge loop retries via `last_hid_init_attempt` every 5s. Mutex `.lock().unwrap()` sites remain (accepted invariant per original FIX note; panic=abort still in Cargo.toml).
+- UPDATE 2026-11-02: Cargo.toml now uses the default `panic = "unwind"`, the bridge loop runs under `catch_unwind` and restarts after a panic, and all mutex locks go through `LockOrRecover` (poison-tolerant). The HidApi handle is created once and only `connect()` is retried.
 
 ### H3 [DONE][VERIFIED-2026-07-25] LED stuck OFF after host sleep/resume (state-loss protocol gap)
 - WHERE: firmware/src/main.cpp:120-127 (PING handler) + bridge/.../src/main.rs:236-249 (presence diffing)
@@ -211,11 +212,18 @@ Re-audit 2026-07-25: every issue re-verified against source; [VERIFIED-2026-07-2
 - STATUS: accepted as-is; the 1.5s boot delay is considered fine.
 - VERIFIED: 2026-07-25 — behavior unchanged (blocking bootAnimation in setup()); acceptance stands.
 
-### L11 [OPEN] NEW: docs/setup.md still references removed serial commands and stale claims (M7 residue)
+### L11 [DONE][VERIFIED-2026-11-02] NEW: docs/setup.md still references removed serial commands and stale claims (M7 residue)
 - WHERE: docs/setup.md "Testing" section (≈line 96) and Verification Checklist (≈line 103)
 - WHAT: States the serial monitor "is only used for `HELP`, `RESET`, and debug logging" — no HELP/RESET serial command handling exists in firmware source (HID 0x08 RESET only). Checklist also expects `Serial.println("BOOT")` in the monitor; no such print exists in firmware/src/main.cpp. setup.md is also ESP32-only and does not mention the rpipico2 target that platformio.ini/flasher support.
 - WHY: Same doc-drift class as M7; devs following setup.md will look for output/commands that don't exist.
 - FIX: Remove HELP/RESET sentence, drop or update the BOOT checklist item, optionally add a short rpipico2 build note.
+- VERIFIED: 2026-11-02 — setup.md contains no HELP/RESET/BOOT-print claims; the rpipico2 target was removed from the project, so no note is needed.
+
+### L12 [OPEN] config.json and .bridge.lock live next to the executable
+- WHERE: bridge/teams-presence-bridge-rs/src/main.rs (`exe_dir.join(".bridge.lock")`, `exe_dir.join("config.json")`)
+- WHAT: Both files are written to the install directory. Under a read-only location (e.g. `Program Files`) startup fails; the error is now reported as "must run from a writable folder" instead of the former misleading "already running" message.
+- WHY: Portable-folder deployment is the current expectation, but a per-user location (`%LOCALAPPDATA%\TeamsPresenceBridge\`) would allow installer-style deployment and multi-user machines.
+- FIX (deferred by decision 2026-11-02): migrate to `%LOCALAPPDATA%` with one-time copy of an existing exe-dir config.json; keep the exe-dir file as fallback for portable use.
 
 ## INFO
 
@@ -230,10 +238,10 @@ Re-audit 2026-07-25: every issue re-verified against source; [VERIFIED-2026-07-2
 - STATUS: documented in firmware/src/main.cpp comments.
 - VERIFIED: 2026-07-25 — setMaxPower comment notes "full white will be dimmed by FastLED to meet this budget".
 
-### I3 [ACCEPTED][VERIFIED-2026-07-25] hid.rs comment/enum duplication of report ID
+### I3 [DONE][VERIFIED-2026-11-02] hid.rs comment/enum duplication of report ID
 - WHERE: bridge/.../src/hid.rs:10, firmware/src/PicoUsbManager.cpp:7 — HID_REPORT_ID_VENDOR=6 duplicated across languages with no shared source of truth; drift risk. Consider generating protocol constants from docs/protocol.md or a shared spec file.
-- STATUS: accepted as-is (overhead of shared spec generator not worth it for 5 constants).
-- VERIFIED: 2026-07-25 — constants still consistent across hid.rs (0x06) and PicoUsbManager.cpp (6); no drift.
+- STATUS: firmware now has `firmware/src/protocol.h` (command/status/selector enums) used by main.cpp instead of bare hex literals; the bridge mirrors them in hid.rs/config.rs. A generator is still considered overkill.
+- VERIFIED: 2026-11-02 — protocol.h, hid.rs and docs/protocol.md agree on all IDs 0x01–0x0E and status codes.
 
 ### I4 [DONE][VERIFIED-2026-07-25] dependency hygiene (versions verified online 2026-07-25)
 - WHERE: bridge Cargo.toml + docs/setup.md:10
@@ -247,25 +255,29 @@ Re-audit 2026-07-25: every issue re-verified against source; [VERIFIED-2026-07-2
 - STATUS: fixed in update_ui.rs.
 - VERIFIED: 2026-07-25 — `.unwrap_or(1)` removed; variant now resolved via gated match `(latest_release, variant)` and plain `.unwrap()` that is provably reachable only when variant is Some (firmware_url gate returns earlier otherwise).
 
-### I6 [OPEN] NEW: build.ps1 -NoOptimizations switch is cosmetic-only
+### I6 [OBSOLETE][VERIFIED-2026-11-02] NEW: build.ps1 -NoOptimizations switch is cosmetic-only
 - WHERE: bridge/teams-presence-bridge-rs/build.ps1:1-23
 - WHAT: `-NoOptimizations` only changes the printed mode string; `$baseArgs` is always `build --release`, and [profile.release] (LTO, strip, opt-level=z) always applies.
 - WHY: Misleading developer UX; the flag silently does nothing.
 - FIX: Remove the switch, or wire it to a real profile (e.g. `cargo build --profile release-noopt` with a dedicated profile).
+- VERIFIED: 2026-11-02 — build.ps1 no longer exists in the repository.
 
-### I7 [OPEN] NEW: UF2 board match accepts any INFO_UF2.TXT containing "RP2350" (M4 fix looser than stated)
+### I7 [OBSOLETE][VERIFIED-2026-11-02] NEW: UF2 board match accepts any INFO_UF2.TXT containing "RP2350" (M4 fix looser than stated)
 - WHERE: bridge/teams-presence-bridge-rs/src/flasher.rs:176 `contains("Board-ID: RP2350") || contains("RP2350")`
 - WHAT: The second disjunct makes the first redundant and matches "RP2350" anywhere in the file (e.g. a non-RP2350 board whose INFO text mentions RP2350 compatibility).
 - WHY: Weakens the M4 guarantee of flashing only the project's device class; residual (low) risk of flashing a wrong RP2350-family board remains regardless.
 - FIX: Parse the `Board-ID:` line explicitly and require it to start with `RP2350`; drop the bare `contains("RP2350")` fallback.
+- VERIFIED: 2026-11-02 — the UF2/RP2350 path no longer exists; flasher.rs only targets the ESP32-S3 and rejects other chips.
 
-### I8 [OPEN] NEW: tail-window skipped after in-place log shrink (L7 edge case)
+### I8 [DONE][VERIFIED-2026-11-02] NEW: tail-window skipped after in-place log shrink (L7 edge case)
 - WHERE: bridge/teams-presence-bridge-rs/src/teams.rs:91-96 (shrink check else-if chain)
 - WHAT: When `metadata.len() < last_position`, last_position is reset to 0 but the `else if last_position == 0` tail-window branch is not re-evaluated in the same pass → the shrunken file is read in full from offset 0 once.
 - WHY: One-off full-file read after in-place truncation; bounded impact (next pass behaves normally). Rotation to a new file path is unaffected (position reset happens before open).
 - FIX: After resetting to 0 on shrink, also apply `saturating_sub(INITIAL_READ_TAIL_BYTES)` (or restructure as two sequential ifs).
+- VERIFIED: 2026-11-02 — teams.rs uses two sequential `if`s; the tail window applies after a shrink reset.
 
-### I9 [OPEN] NEW: dead code — unused field/variant warnings and unreachable UI branch
+### I9 [DONE][VERIFIED-2026-11-02] NEW: dead code — unused field/variant warnings and unreachable UI branch
 - WHERE: bridge/.../src/updater.rs:40 (`UpdateCheckResult.latest` never read), src/flasher.rs:18 (`FlashStage::Error` never constructed), src/update_ui.rs:118-133 (button gate: `has_fw_url` is false whenever `firmware_current.is_none()`, so the `"(Ensure device is connected)"` label and the disconnected-device flash path in start_firmware_update are unreachable from the UI).
 - WHY: `cargo check` warnings; unreachable branches mask intent (same class as I5).
 - FIX: Drop `latest` field (check_updates callers already hold the ReleaseInfo), remove or use `FlashStage::Error`, and either allow flashing with device disconnected (variant picker) or delete the dead label/path.
+- VERIFIED: 2026-11-02 — `UpdateCheckResult` has no `latest` field, `FlashStage::Error` is constructed by `fail_flash`, the dead label is gone; `cargo clippy --all-targets -- -D warnings` passes clean.

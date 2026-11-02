@@ -61,6 +61,7 @@ Use the command line to run the Rust bridge application. Ensure the firmware is 
    - Select **White**, then **Show calibration pattern**, and verify steady white remains active beyond the old 2.8-second timeout. Adjust RGB balance and verify the white changes live. Change Teams presence and verify white remains active.
    - Select **Mid-gray** and verify the pattern switches immediately to dimmer white. With neutral gains, verify gamma changes affect brightness; at gamma 1.0, verify gains above 100% affect the selected channel until it clips. Verify slider changes do not end the pattern.
    - Select **Save to device** and verify the latest Teams state returns. Restart or reconnect the device and verify the calibration values remain active.
+   - Adjust a balance slider, select **Show calibration pattern**, then **Cancel**: verify the pattern ends, the sliders snap back to the saved values, and the device output matches the saved profile.
    - While white calibration is active, stop the bridge and verify the normal disconnected breathing animation starts after 60 seconds.
    - Select **Reset to neutral**, verify the output returns to the uncorrected appearance, and reconnect to confirm the neutral profile persisted.
    - Connect firmware older than calibration support; verify the UI reports unsupported while presence, brightness, transitions, and heartbeat continue working.

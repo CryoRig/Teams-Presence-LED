@@ -20,6 +20,9 @@ use hid::HidManager;
 use teams::TeamsClient;
 use eframe::egui;
 
+// HID open/reconnect attempts are spaced out; the USB enumeration itself is cheap but noisy.
+const HID_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 #[derive(Clone, Default, PartialEq, Debug)]
 pub struct AppStatus {
     pub esp_connected: bool,
@@ -55,9 +58,19 @@ fn main() -> eframe::Result<()> {
 
     let _single_instance_lock = match open_opts.open(&lock_path) {
         Ok(f) => f,
-        Err(e) => {
+        // ERROR_SHARING_VIOLATION: another instance holds the exclusive handle.
+        Err(e) if e.raw_os_error() == Some(32) => {
             eprintln!("[Bridge] Another instance of Teams Presence Bridge is ALREADY running in the background/system tray! ({})", e);
             eprintln!("[Bridge] To reopen the settings window, click the Teams icon in your Windows System Tray (bottom right near clock).");
+            return Ok(());
+        }
+        Err(e) => {
+            // Lock and config.json live next to the exe, so an unwritable install dir blocks startup.
+            eprintln!(
+                "[Bridge] Cannot create lock file {} ({}). The bridge must run from a writable folder.",
+                lock_path.to_string_lossy(),
+                e
+            );
             return Ok(());
         }
     };
@@ -121,7 +134,7 @@ fn main() -> eframe::Result<()> {
     let app_update_ui_state = update_ui_state.clone();
 
     // Spawn background bridge thread; a panic inside the loop is logged and the loop restarted
-    thread::spawn(move || {
+    let bridge_thread = thread::spawn(move || {
         loop {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_bridge_loop(
@@ -187,7 +200,8 @@ fn main() -> eframe::Result<()> {
     };
 
     // Run the eframe app
-    eframe::run_native(
+    let app_shutdown = shutdown_flag.clone();
+    let ui_result = eframe::run_native(
         "Teams Presence Bridge Settings",
         options,
         Box::new(move |cc| {
@@ -198,14 +212,20 @@ fn main() -> eframe::Result<()> {
                 app_calibration,
                 app_status,
                 config_path_str,
-                shutdown_flag,
+                app_shutdown,
                 app_flash_pause,
                 app_bootloader_trigger,
                 app_update_ui_state,
             )))
         }),
-    )?;
-    Ok(())
+    );
+
+    // Let the bridge loop observe the shutdown and send CMD_OFF before the process exits.
+    shutdown_flag.store(true, Ordering::Relaxed);
+    if bridge_thread.join().is_err() {
+        eprintln!("[Bridge] Bridge thread panicked during shutdown");
+    }
+    ui_result
 }
 
 pub fn create_dummy_icon() -> tray_icon::Icon {
@@ -228,7 +248,7 @@ fn run_bridge_loop(
     bootloader_trigger: Arc<AtomicBool>,
 ) {
     let mut hid_manager: Option<HidManager> = None;
-    let mut last_hid_init_attempt = Instant::now() - Duration::from_secs(5);
+    let mut last_hid_init_attempt = Instant::now() - HID_RETRY_INTERVAL;
     let mut teams_client = TeamsClient::new();
     
     let mut previous_presence: Option<String> = None;
@@ -248,40 +268,42 @@ fn run_bridge_loop(
             break;
         }
 
-        if hid_manager.is_none() && now.duration_since(last_hid_init_attempt) >= Duration::from_secs(5) {
+        let hid_connected = hid_manager.as_ref().is_some_and(|h| h.is_connected());
+        if !hid_connected && now.duration_since(last_hid_init_attempt) >= HID_RETRY_INTERVAL {
             last_hid_init_attempt = now;
-            match HidManager::new() {
-                Ok(mut manager) => {
-                    let connected = manager.connect();
-                    if connected {
-                        let device_calibration = manager.query_calibration();
-                        {
-                            let mut state = calibration.lock_or_recover();
-                            state.connected = true;
-                            state.supported = Some(device_calibration.is_some());
-                            if let Some(profile) = device_calibration {
-                                state.profile = profile;
-                            }
-                            state.preview_pending = false;
-                            state.save_pending = false;
-                            state.test_pending = false;
-                        }
-                        let c = config.lock_or_recover();
-                        manager.send_brightness(c.brightness);
-                        last_sent_brightness = Some(c.brightness);
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        
-                        manager.send_transition(c.transition_duration_ms);
-                        last_sent_transition = Some(c.transition_duration_ms);
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                        
-                        previous_presence = None; // Force re-send of presence color
+            // The HidApi handle is created once; only the device open is retried.
+            if hid_manager.is_none() {
+                match HidManager::new() {
+                    Ok(manager) => hid_manager = Some(manager),
+                    Err(e) => eprintln!("[Bridge] HID init failed, will retry: {}", e),
+                }
+            }
+            if let Some(manager) = hid_manager.as_mut()
+                && manager.connect()
+            {
+                let device_calibration = manager.query_calibration();
+                {
+                    let mut state = calibration.lock_or_recover();
+                    state.connected = true;
+                    state.supported = Some(device_calibration.is_some());
+                    if let Some(profile) = device_calibration {
+                        state.profile = profile;
                     }
-                    hid_manager = Some(manager);
+                    state.preview_pending = false;
+                    state.save_pending = false;
+                    state.test_pending = false;
+                    state.cancel_pending = false;
                 }
-                Err(e) => {
-                    eprintln!("[Bridge] HID init failed, will retry: {}", e);
-                }
+                let c = config.lock_or_recover();
+                manager.send_brightness(c.brightness);
+                last_sent_brightness = Some(c.brightness);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                
+                manager.send_transition(c.transition_duration_ms);
+                last_sent_transition = Some(c.transition_duration_ms);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                
+                previous_presence = None; // Force re-send of presence color
             }
         }
 
@@ -311,19 +333,9 @@ fn run_bridge_loop(
             (c.poll_interval_ms, c.ping_interval_ms, c.brightness, c.transition_duration_ms)
         };
 
-        // 1. Slow tick: Teams polling and Serial reconnection
+        // 1. Slow tick: Teams polling and version query
         if now.duration_since(last_poll_time).as_millis() as u64 >= poll_interval {
             last_poll_time = now;
-
-            // If not connected, drop context and retry next tick
-            if let Some(h) = hid_manager.as_ref()
-                && !h.is_connected() {
-                    hid_manager = None;
-                    let mut state = calibration.lock_or_recover();
-                    state.connected = false;
-                    state.supported = None;
-                    continue;
-                }
 
             // Query version if we are connected but don't have it yet
             if let Some(h) = hid_manager.as_mut()
@@ -386,6 +398,13 @@ fn run_bridge_loop(
 
         // 4. Update UI Status
         let connected = hid_manager.as_ref().is_some_and(|h| h.is_connected());
+        if !connected {
+            let mut state = calibration.lock_or_recover();
+            if state.connected {
+                state.connected = false;
+                state.supported = None;
+            }
+        }
 
         let mut status_changed = false;
         {
@@ -403,25 +422,35 @@ fn run_bridge_loop(
         let calibration_actions = {
             let mut state = calibration.lock_or_recover();
             if state.connected && state.supported == Some(true) {
-                let actions = (state.preview_pending, state.save_pending, state.test_pending, state.profile, state.test_pattern);
+                let actions = (state.preview_pending, state.save_pending, state.test_pending, state.cancel_pending, state.profile, state.test_pattern);
                 state.preview_pending = false;
                 state.save_pending = false;
                 state.test_pending = false;
+                state.cancel_pending = false;
                 actions
             } else {
-                (false, false, false, state.profile, state.test_pattern)
+                (false, false, false, false, state.profile, state.test_pattern)
             }
         };
         if let Some(h) = hid_manager.as_mut()
             && h.is_connected() {
-                if calibration_actions.0 {
-                    h.preview_calibration(calibration_actions.3);
-                }
-                if calibration_actions.1 {
-                    h.save_calibration();
-                }
-                if calibration_actions.2 {
-                    h.start_calibration_test(calibration_actions.4);
+                let (preview, save, test, cancel, profile, pattern) = calibration_actions;
+                if cancel {
+                    h.cancel_calibration_test();
+                    // Re-read the persisted profile so the sliders reflect what the device reverted to.
+                    if let Some(device_profile) = h.query_calibration() {
+                        calibration.lock_or_recover().profile = device_profile;
+                    }
+                } else {
+                    if preview {
+                        h.preview_calibration(profile);
+                    }
+                    if save {
+                        h.save_calibration();
+                    }
+                    if test {
+                        h.start_calibration_test(pattern);
+                    }
                 }
             }
         if status_changed

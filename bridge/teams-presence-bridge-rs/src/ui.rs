@@ -304,6 +304,11 @@ impl eframe::App for TeamsBridgeApp {
                                 if ui.button("Save to device").clicked() {
                                     calibration.save_pending = true;
                                 }
+                                if ui.button("Cancel").on_hover_text("Exit the test pattern and discard unsaved changes").clicked() {
+                                    calibration.preview_pending = false;
+                                    calibration.test_pending = false;
+                                    calibration.cancel_pending = true;
+                                }
                                 if ui.button("Reset to neutral").clicked() {
                                     calibration.profile = crate::hid::CalibrationProfile::default();
                                     calibration.preview_pending = true;

@@ -16,7 +16,7 @@ pub struct TeamsClient {
     last_position: u64,
     last_presence: Option<String>,
     last_dir_scan: Option<Instant>,
-    system: System,
+    system: Option<System>,
     last_process_check: Option<Instant>,
     teams_running: bool,
 }
@@ -37,13 +37,18 @@ impl TeamsClient {
             
         eprintln!("[TeamsClient] Initialized using log directory: {:?}", log_directory);
 
+        let system = System::new().map_err(|error| {
+            eprintln!("[TeamsClient] Could not initialize process monitor: {error}");
+            error
+        }).ok();
+
         Self {
             log_directory,
             current_file: None,
             last_position: 0,
             last_presence: None,
             last_dir_scan: None,
-            system: System::new(),
+            system,
             last_process_check: None,
             teams_running: false,
         }
@@ -57,12 +62,12 @@ impl TeamsClient {
 
     fn is_teams_running(&mut self) -> bool {
         if self.last_process_check.is_none_or(|t| t.elapsed() >= PROCESS_CHECK_INTERVAL) {
-            self.system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
-            let running = self
-                .system
-                .processes()
-                .values()
-                .any(|p| p.name().eq_ignore_ascii_case(TEAMS_PROCESS_NAME));
+            let running = if let Some(system) = self.system.as_mut() {
+                system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+                system.processes().values().any(|p| p.name().eq_ignore_ascii_case(TEAMS_PROCESS_NAME))
+            } else {
+                false
+            };
             if running != self.teams_running {
                 eprintln!("[TeamsClient] {} is {}", TEAMS_PROCESS_NAME, if running { "running" } else { "not running" });
             }

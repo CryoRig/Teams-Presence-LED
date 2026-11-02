@@ -152,6 +152,16 @@ fn verify_firmware_magic(bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let digest = Sha256::digest(bytes);
+    digest.iter().fold(String::with_capacity(64), |mut output, byte| {
+        let _ = write!(output, "{byte:02x}");
+        output
+    })
+}
+
 fn verify_firmware_sha256(
     firmware_url: &str,
     sha256sums_url: &str,
@@ -180,9 +190,7 @@ fn verify_firmware_sha256(
         .next()
         .ok_or_else(|| format!("No SHA256 entry found for '{}' in SHA256SUMS", asset_name))?;
 
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let actual_hash = format!("{:x}", hasher.finalize());
+    let actual_hash = sha256_hex(bytes);
 
     if !actual_hash.eq_ignore_ascii_case(&expected_hash) {
         return Err(format!(
@@ -218,4 +226,17 @@ pub fn download_firmware(url: &str, sha256sums_url: Option<&str>) -> Result<Path
 
     let (_file, file_path) = tmp.keep()?;
     Ok(file_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_digest_is_encoded_as_lowercase_hex() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }

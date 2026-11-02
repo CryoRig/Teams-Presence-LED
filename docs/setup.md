@@ -6,8 +6,8 @@ This guide covers the one-time setup required to build and debug both the firmwa
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| [PlatformIO](https://platformio.org/) | Latest (VS Code extension) | Firmware build, flash, and debug |
-| [Rust](https://www.rust-lang.org/) | 1.88+ (2024 edition, let-chains) | Bridge application and diagnostics |
+| [PlatformIO](https://platformio.org/) | Core 6.2.0 | Firmware build, flash, and debug |
+| [Rust](https://www.rust-lang.org/) | 1.99.1 (pinned stable toolchain) | Bridge application and diagnostics |
 
 ## Board
 
@@ -15,7 +15,8 @@ This project uses the **Seeed XIAO ESP32-S3**. Its built-in USB-C connector expo
 
 - Product page: [Seeed XIAO ESP32-S3](https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/)
 - Upload protocol: `esptool` (via the built-in USB)
-- Framework: Arduino (via PlatformIO `espressif32@7.1.3`)
+- Framework: Arduino (via PlatformIO `espressif32@8.0.0`)
+- FastLED: `3.10.8` (exact pin, validated for the ESP32-S3 build)
 
 ## Windows USB Driver (One-Time)
 

@@ -281,7 +281,7 @@ fn run_bridge_loop(
             if let Some(manager) = hid_manager.as_mut()
                 && manager.connect()
             {
-                let device_calibration = manager.query_calibration();
+                let device_calibration = manager.query_calibration().map(hid::CalibrationProfile::normalized);
                 {
                     let mut state = calibration.lock_or_recover();
                     state.connected = true;
@@ -439,7 +439,7 @@ fn run_bridge_loop(
                     h.cancel_calibration_test();
                     // Re-read the persisted profile so the sliders reflect what the device reverted to.
                     if let Some(device_profile) = h.query_calibration() {
-                        calibration.lock_or_recover().profile = device_profile;
+                        calibration.lock_or_recover().profile = device_profile.normalized();
                     }
                 } else {
                     if preview {

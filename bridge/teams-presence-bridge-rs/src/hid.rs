@@ -45,6 +45,26 @@ impl Default for CalibrationProfile {
     }
 }
 
+/// Gains are attenuation-only; 100 means unchanged.
+pub const MAX_GAIN: u8 = 100;
+
+impl CalibrationProfile {
+    /// Scale legacy gains (>100) so the strongest channel is 100, keeping channel ratios.
+    pub fn normalized(self) -> Self {
+        let peak = self.red_gain.max(self.green_gain).max(self.blue_gain);
+        if peak <= MAX_GAIN {
+            return self;
+        }
+        let scale = |gain: u8| ((gain as u16 * MAX_GAIN as u16 + peak as u16 / 2) / peak as u16) as u8;
+        Self {
+            red_gain: scale(self.red_gain),
+            green_gain: scale(self.green_gain),
+            blue_gain: scale(self.blue_gain),
+            gamma_tenths: self.gamma_tenths,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq)]
 #[repr(u8)]
 pub enum CalibrationTestPattern {
@@ -251,5 +271,15 @@ mod tests {
         assert!(!state.preview_pending);
         assert!(!state.save_pending);
         assert!(!state.cancel_pending);
+    }
+
+    #[test]
+    fn legacy_gains_normalize_to_attenuation_only_keeping_ratios() {
+        let legacy = CalibrationProfile { red_gain: 150, green_gain: 100, blue_gain: 100, gamma_tenths: 12 };
+        assert_eq!(legacy.normalized(), CalibrationProfile { red_gain: 100, green_gain: 67, blue_gain: 67, gamma_tenths: 12 });
+        let extreme = CalibrationProfile { red_gain: 200, green_gain: 200, blue_gain: 50, gamma_tenths: 10 };
+        assert_eq!(extreme.normalized(), CalibrationProfile { red_gain: 100, green_gain: 100, blue_gain: 25, gamma_tenths: 10 });
+        let in_range = CalibrationProfile { red_gain: 80, green_gain: 100, blue_gain: 90, gamma_tenths: 10 };
+        assert_eq!(in_range.normalized(), in_range);
     }
 }

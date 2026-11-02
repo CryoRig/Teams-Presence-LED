@@ -279,9 +279,10 @@ impl eframe::App for TeamsBridgeApp {
                         (true, Some(false)) => { ui.label("Calibration requires newer firmware."); }
                         (true, _) => {
                             let mut changed = false;
-                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.red_gain, 0..=200).text("Red balance")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.green_gain, 0..=200).text("Green balance")).changed();
-                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.blue_gain, 0..=200).text("Blue balance")).changed();
+                            let max_gain = crate::hid::MAX_GAIN;
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.red_gain, 0..=max_gain).text("Red balance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.green_gain, 0..=max_gain).text("Green balance")).changed();
+                            changed |= ui.add(egui::Slider::new(&mut calibration.profile.blue_gain, 0..=max_gain).text("Blue balance")).changed();
                             let mut gamma = calibration.profile.gamma_tenths as f32 / 10.0;
                             if ui.add(egui::Slider::new(&mut gamma, 0.5..=3.0).step_by(0.1).text("Gamma")).changed() {
                                 calibration.profile.gamma_tenths = (gamma * 10.0).round() as u8;
@@ -315,7 +316,7 @@ impl eframe::App for TeamsBridgeApp {
                                     calibration.save_pending = true;
                                 }
                             });
-                            ui.label("Balance: 100% is unchanged. Gamma: 1.0 is neutral.");
+                            ui.label("Balance: 100% is unchanged; lower the channels that are too strong. Gamma: 1.0 is neutral.");
                         }
                     }
                 }

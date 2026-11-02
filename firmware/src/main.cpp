@@ -55,7 +55,9 @@ struct LedCalibration {
     uint8_t gammaTenths;
 };
 
-static const uint8_t CALIBRATION_SCHEMA = 1;
+// Schema 1 allowed gains up to 200, which only clipped; schema 2 is attenuation-only (0-100).
+static const uint8_t CALIBRATION_SCHEMA = 2;
+static const uint8_t MAX_GAIN = 100;
 static const LedCalibration NEUTRAL_CALIBRATION = {100, 100, 100, 10};
 LedCalibration calibration = NEUTRAL_CALIBRATION;
 Preferences calibrationPreferences;
@@ -87,24 +89,44 @@ LedCalibration calibrationDefaultsForVariant(uint8_t variant) {
 }
 
 LedCalibration clampCalibration(LedCalibration value) {
-    value.redGain = min(value.redGain, (uint8_t)200);
-    value.greenGain = min(value.greenGain, (uint8_t)200);
-    value.blueGain = min(value.blueGain, (uint8_t)200);
+    value.redGain = min(value.redGain, MAX_GAIN);
+    value.greenGain = min(value.greenGain, MAX_GAIN);
+    value.blueGain = min(value.blueGain, MAX_GAIN);
     value.gammaTenths = constrain(value.gammaTenths, (uint8_t)5, (uint8_t)30);
     return value;
 }
 
+// Scale a legacy profile so its strongest channel is 100, keeping the channel ratios.
+LedCalibration normalizeCalibration(LedCalibration value) {
+    uint8_t peak = max(value.redGain, max(value.greenGain, value.blueGain));
+    if (peak > MAX_GAIN) {
+        value.redGain = ((uint16_t)value.redGain * MAX_GAIN + peak / 2) / peak;
+        value.greenGain = ((uint16_t)value.greenGain * MAX_GAIN + peak / 2) / peak;
+        value.blueGain = ((uint16_t)value.blueGain * MAX_GAIN + peak / 2) / peak;
+    }
+    return clampCalibration(value);
+}
+
+void saveCalibration();
+
 void loadCalibration() {
     calibration = calibrationDefaultsForVariant(HW_VARIANT);
     calibrationPreferences.begin("led-cal", true);
-    if (calibrationPreferences.getUChar("schema", 0) == CALIBRATION_SCHEMA) {
+    uint8_t schema = calibrationPreferences.getUChar("schema", 0);
+    if (schema == 1 || schema == CALIBRATION_SCHEMA) {
         calibration.redGain = calibrationPreferences.getUChar("red", calibration.redGain);
         calibration.greenGain = calibrationPreferences.getUChar("green", calibration.greenGain);
         calibration.blueGain = calibrationPreferences.getUChar("blue", calibration.blueGain);
         calibration.gammaTenths = calibrationPreferences.getUChar("gamma", calibration.gammaTenths);
-        calibration = clampCalibration(calibration);
     }
     calibrationPreferences.end();
+
+    if (schema == 1) {
+        calibration = normalizeCalibration(calibration);
+        saveCalibration(); // one-time migration to schema 2
+    } else {
+        calibration = clampCalibration(calibration);
+    }
 }
 
 void saveCalibration() {

@@ -341,21 +341,6 @@ impl eframe::App for TeamsBridgeApp {
                         }
                     });
 
-                ui.add_space(10.0);
-                egui::Grid::new("watchdog_grid")
-                    .num_columns(2)
-                    .spacing([20.0, 10.0])
-                    .min_col_width(120.0)
-                    .show(ui, |ui| {
-                        ui.label("Watchdog:");
-                        ui.horizontal(|ui| {
-                            if render_color_command(ui, &mut self.local_config.watchdog, "watchdog") {
-                                self.config_dirty = true;
-                            }
-                        });
-                        ui.end_row();
-                    });
-
                 ui.add_space(20.0);
                 let save_label = if self.config_dirty {
                     "Save Configuration *"
@@ -413,12 +398,11 @@ fn render_color_command(ui: &mut egui::Ui, cmd: &mut ColorCommand, id_salt: &str
     let mut changed = false;
 
     egui::ComboBox::from_id_salt(format!("cmd_{}", id_salt))
-        .selected_text(&cmd.command)
+        .selected_text(cmd.command.label())
         .show_ui(ui, |ui| {
-            changed |= ui.selectable_value(&mut cmd.command, "OFF".to_string(), "OFF").changed();
-            changed |= ui.selectable_value(&mut cmd.command, "SOLID".to_string(), "SOLID").changed();
-            changed |= ui.selectable_value(&mut cmd.command, "BREATHE".to_string(), "BREATHE").changed();
-            changed |= ui.selectable_value(&mut cmd.command, "BREATHE_SLOW".to_string(), "BREATHE_SLOW").changed();
+            for mode in crate::config::LedMode::ALL {
+                changed |= ui.selectable_value(&mut cmd.command, mode, mode.label()).changed();
+            }
         });
 
     let mut color = [cmd.r, cmd.g, cmd.b];

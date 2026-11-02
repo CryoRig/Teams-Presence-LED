@@ -340,26 +340,23 @@ fn run_bridge_loop(
             teams_parsing = teams_client.has_valid_log();
             if presence != previous_presence {
                 if let Some(p) = &presence {
-                    let (presence_map, watchdog) = {
-                        let c = config.lock_or_recover();
-                        (c.presence_map.clone(), c.watchdog.clone())
-                    };
+                    let presence_map = config.lock_or_recover().presence_map.clone();
                     eprintln!("[Bridge] Presence changed to: {}", p);
                     let cmd_params = if let Some(c) = presence_map.get(p) {
                         eprintln!("[Bridge] Found mapped color for {}: {:?}", p, c);
-                        c.to_hid_params()
+                        Some(c.to_hid_params())
                     } else if let Some(unknown) = presence_map.get("Unknown") {
                         eprintln!("[Bridge] Unknown presence '{}' not in presence_map, using 'Unknown' mapping", p);
-                        unknown.to_hid_params()
+                        Some(unknown.to_hid_params())
                     } else {
-                        eprintln!("[Bridge] Unknown presence '{}' and no 'Unknown' mapping found, sending watchdog command", p);
-                        watchdog.to_hid_params()
+                        eprintln!("[Bridge] Unknown presence '{}' and no 'Unknown' mapping found; leaving LEDs unchanged", p);
+                        None
                     };
-                    if let Some(h) = hid_manager.as_mut() {
+                    if let (Some(h), Some(cmd_params)) = (hid_manager.as_mut(), cmd_params) {
                         eprintln!("[Bridge] Sending HID Color Command -> CMD: {}, R: {}, G: {}, B: {}", cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
                         h.send_color_command(cmd_params.0, cmd_params.1, cmd_params.2, cmd_params.3);
+                        last_ping_time = Instant::now(); // Presence command proves host is alive
                     }
-                    last_ping_time = Instant::now(); // Presence command proves host is alive
                 } else {
                     eprintln!("[Bridge] Presence changed to: None (Teams not running or no status detected)");
                 }

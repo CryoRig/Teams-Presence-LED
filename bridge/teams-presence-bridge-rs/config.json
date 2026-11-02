@@ -58,11 +58,5 @@
       "g": 0,
       "b": 0
     }
-  },
-  "watchdog": {
-    "command": "BREATHE_SLOW",
-    "r": 255,
-    "g": 255,
-    "b": 255
   }
 }

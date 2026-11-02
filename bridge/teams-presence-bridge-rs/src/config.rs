@@ -22,8 +22,6 @@ pub struct Config {
     pub transition_duration_ms: u16,
     #[serde(default)]
     pub presence_map: HashMap<String, ColorCommand>,
-    #[serde(default = "default_watchdog")]
-    pub watchdog: ColorCommand,
 }
 
 fn default_poll_interval() -> u64 {
@@ -42,10 +40,6 @@ fn default_transition() -> u16 {
     500
 }
 
-fn default_watchdog() -> ColorCommand {
-    ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 255, b: 255 }
-}
-
 impl Config {
     pub fn clamp_ranges(&mut self) {
         self.poll_interval_ms = self.poll_interval_ms.clamp(MIN_POLL_INTERVAL_MS, MAX_POLL_INTERVAL_MS);
@@ -55,16 +49,17 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
+        use LedMode::*;
         let mut presence_map = HashMap::new();
-        presence_map.insert("DoNotDisturb".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
-        presence_map.insert("Away".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 120, b: 0 });
-        presence_map.insert("Busy".into(), ColorCommand { command: "SOLID".into(), r: 200, g: 0, b: 0 });
-        presence_map.insert("BusyIdle".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 200, g: 0, b: 0 });
-        presence_map.insert("BeRightBack".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 80, b: 0 });
-        presence_map.insert("Unknown".into(), ColorCommand { command: "BREATHE".into(), r: 80, g: 80, b: 80 });
-        presence_map.insert("Available".into(), ColorCommand { command: "SOLID".into(), r: 0, g: 200, b: 0 });
-        presence_map.insert("AvailableIdle".into(), ColorCommand { command: "BREATHE_SLOW".into(), r: 255, g: 120, b: 0 });
-        presence_map.insert("Offline".into(), ColorCommand { command: "OFF".into(), r: 0, g: 0, b: 0 });
+        presence_map.insert("DoNotDisturb".into(), ColorCommand { command: Solid, r: 200, g: 0, b: 0 });
+        presence_map.insert("Away".into(), ColorCommand { command: BreatheSlow, r: 255, g: 120, b: 0 });
+        presence_map.insert("Busy".into(), ColorCommand { command: Solid, r: 200, g: 0, b: 0 });
+        presence_map.insert("BusyIdle".into(), ColorCommand { command: BreatheSlow, r: 200, g: 0, b: 0 });
+        presence_map.insert("BeRightBack".into(), ColorCommand { command: BreatheSlow, r: 255, g: 80, b: 0 });
+        presence_map.insert("Unknown".into(), ColorCommand { command: Breathe, r: 80, g: 80, b: 80 });
+        presence_map.insert("Available".into(), ColorCommand { command: Solid, r: 0, g: 200, b: 0 });
+        presence_map.insert("AvailableIdle".into(), ColorCommand { command: BreatheSlow, r: 255, g: 120, b: 0 });
+        presence_map.insert("Offline".into(), ColorCommand { command: Off, r: 0, g: 0, b: 0 });
 
         Self {
             poll_interval_ms: default_poll_interval(),
@@ -72,14 +67,46 @@ impl Default for Config {
             brightness: default_brightness(),
             transition_duration_ms: default_transition(),
             presence_map,
-            watchdog: default_watchdog(),
+        }
+    }
+}
+
+/// LED behaviour for a presence state; serialized as the protocol command name.
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum LedMode {
+    Off,
+    Solid,
+    Breathe,
+    BreatheSlow,
+}
+
+impl LedMode {
+    pub const ALL: [LedMode; 4] = [LedMode::Off, LedMode::Solid, LedMode::Breathe, LedMode::BreatheSlow];
+
+    /// HID command ID (protocol.md).
+    pub fn command_id(self) -> u8 {
+        match self {
+            LedMode::Off => 0x02,
+            LedMode::Solid => 0x03,
+            LedMode::Breathe => 0x04,
+            LedMode::BreatheSlow => 0x05,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LedMode::Off => "OFF",
+            LedMode::Solid => "SOLID",
+            LedMode::Breathe => "BREATHE",
+            LedMode::BreatheSlow => "BREATHE_SLOW",
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ColorCommand {
-    pub command: String,
+    pub command: LedMode,
     pub r: u8,
     pub g: u8,
     pub b: u8,
@@ -87,14 +114,7 @@ pub struct ColorCommand {
 
 impl ColorCommand {
     pub fn to_hid_params(&self) -> (u8, u8, u8, u8) {
-        let cmd_id = match self.command.as_str() {
-            "OFF" => 0x02,
-            "SOLID" => 0x03,
-            "BREATHE" => 0x04,
-            "BREATHE_SLOW" => 0x05,
-            _ => 0x02, // fallback to OFF
-        };
-        (cmd_id, self.r, self.g, self.b)
+        (self.command.command_id(), self.r, self.g, self.b)
     }
 }
 
@@ -154,28 +174,46 @@ mod tests {
             "transitionDurationMs": 500,
             "presenceMap": {
                 "Available": { "command": "SOLID", "r": 0, "g": 200, "b": 0 }
-            },
-            "watchdog": { "command": "BREATHE_SLOW", "r": 255, "g": 255, "b": 255 }
+            }
         }"#;
         fs::write(&path, partial_json).unwrap();
 
         let loaded = load_config(path.to_str().unwrap()).unwrap();
         assert!(loaded.presence_map.contains_key("AvailableIdle"));
         assert!(loaded.presence_map.contains_key("BusyIdle"));
-        assert_eq!(loaded.presence_map.get("Available").unwrap().command, "SOLID");
+        assert_eq!(loaded.presence_map.get("Available").unwrap().command, LedMode::Solid);
     }
 
     #[test]
     fn test_load_config_tolerates_missing_fields_and_clamps_ranges() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("minimal_config.json");
-        fs::write(&path, r#"{ "pingIntervalMs": 0, "pollIntervalMs": 999999 }"#).unwrap();
+        // Legacy "watchdog" key must be ignored, not rejected.
+        fs::write(&path, r#"{ "pingIntervalMs": 0, "pollIntervalMs": 999999, "watchdog": { "command": "BREATHE_SLOW", "r": 255, "g": 255, "b": 255 } }"#).unwrap();
 
         let loaded = load_config(path.to_str().unwrap()).unwrap();
         assert_eq!(loaded.ping_interval_ms, MIN_PING_INTERVAL_MS);
         assert_eq!(loaded.poll_interval_ms, MAX_POLL_INTERVAL_MS);
-        assert_eq!(loaded.watchdog.command, "BREATHE_SLOW");
         assert!(loaded.presence_map.contains_key("Offline"));
+    }
+
+    #[test]
+    fn test_unknown_led_mode_is_rejected_at_load() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("typo_config.json");
+        fs::write(&path, r#"{ "presenceMap": { "Busy": { "command": "BRETHE", "r": 1, "g": 2, "b": 3 } } }"#).unwrap();
+        assert!(load_config(path.to_str().unwrap()).is_err());
+    }
+
+    #[test]
+    fn test_led_mode_round_trips_as_protocol_names() {
+        for mode in LedMode::ALL {
+            let json = serde_json::to_string(&mode).unwrap();
+            assert_eq!(json, format!("\"{}\"", mode.label()));
+            assert_eq!(serde_json::from_str::<LedMode>(&json).unwrap(), mode);
+        }
+        assert_eq!(LedMode::Off.command_id(), 0x02);
+        assert_eq!(LedMode::BreatheSlow.command_id(), 0x05);
     }
 
     #[test]

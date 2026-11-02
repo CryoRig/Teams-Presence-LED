@@ -17,8 +17,11 @@ void CustomUSBHIDVendor::_onOutput(uint8_t report_id, const uint8_t* buffer, uin
         
         if (UsbManager::instance && UsbManager::instance->cmdQueue) {
             // Runs in the TinyUSB task (not an ISR). Bypasses TinyUSB's rx_queue and the
-            // ephemeral-pointer pitfalls of the esp_event system; drop silently if full.
-            xQueueSend(UsbManager::instance->cmdQueue, &cmd, 0);
+            // ephemeral-pointer pitfalls of the esp_event system.
+            if (xQueueSend(UsbManager::instance->cmdQueue, &cmd, 0) != pdTRUE
+                && UsbManager::instance->droppedCommands < 0xFF) {
+                UsbManager::instance->droppedCommands++;
+            }
         }
     }
 }
@@ -69,4 +72,10 @@ void UsbManager::loop() {
             cmdCallback(cmd.cmd, cmd.p1, cmd.p2, cmd.p3, cmd.p4);
         }
     }
+}
+
+uint8_t UsbManager::takeDroppedCommandCount() {
+    uint8_t count = droppedCommands;
+    droppedCommands = 0;
+    return count;
 }

@@ -8,6 +8,9 @@
 #include <soc/rtc_cntl_struct.h>
 #include <soc/usb_serial_jtag_struct.h>
 #include "UsbManager.h"
+#include "protocol.h"
+
+using namespace proto;
 
 UsbManager usbManager;
 
@@ -201,68 +204,61 @@ static void markHostAlive() {
     lastHeartbeat = millis();
 }
 
+static void setPresenceState(State state, CRGB color) {
+    // A running calibration test keeps the LEDs; only the state to restore afterwards is updated.
+    if (currentState != STATE_CALIBRATION_TEST) {
+        startStateTransition();
+        currentState = state;
+    }
+    targetColor = color;
+    lastCommandedState = state;
+    lastCommandedColor = color;
+    lastHeartbeat = millis();
+}
+
+static void exitCalibrationTest() {
+    if (currentState == STATE_CALIBRATION_TEST) {
+        startStateTransition();
+        currentState = lastCommandedState;
+        targetColor = lastCommandedColor;
+    }
+}
+
 void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
-    uint8_t response[2] = {0x02, 0x00}; // OK by default
+    uint8_t response[2] = {STATUS_OK, 0x00};
 
     switch (cmd) {
-        case 0x01: // PING
-            response[0] = 0x01; // PONG
+        case CMD_PING:
+            response[0] = STATUS_PONG;
             markHostAlive();
             break;
-        case 0x02: // OFF
-            if (currentState != STATE_CALIBRATION_TEST) {
-                startStateTransition();
-                currentState = STATE_OFF;
-            }
-            lastCommandedState = STATE_OFF;
-            lastCommandedColor = CRGB::Black;
-            lastHeartbeat = millis();
+        case CMD_OFF:
+            setPresenceState(STATE_OFF, CRGB::Black);
             break;
-        case 0x03: // SOLID
-            if (currentState != STATE_CALIBRATION_TEST) {
-                startStateTransition();
-                currentState = STATE_SOLID;
-            }
-            targetColor = CRGB(p1, p2, p3);
-            lastCommandedState = STATE_SOLID;
-            lastCommandedColor = targetColor;
-            lastHeartbeat = millis();
+        case CMD_SOLID:
+            setPresenceState(STATE_SOLID, CRGB(p1, p2, p3));
             break;
-        case 0x04: // BREATHE
-            if (currentState != STATE_CALIBRATION_TEST) {
-                startStateTransition();
-                currentState = STATE_BREATHE;
-            }
-            targetColor = CRGB(p1, p2, p3);
-            lastCommandedState = STATE_BREATHE;
-            lastCommandedColor = targetColor;
-            lastHeartbeat = millis();
+        case CMD_BREATHE:
+            setPresenceState(STATE_BREATHE, CRGB(p1, p2, p3));
             break;
-        case 0x05: // BREATHE_SLOW
-            if (currentState != STATE_CALIBRATION_TEST) {
-                startStateTransition();
-                currentState = STATE_BREATHE_SLOW;
-            }
-            targetColor = CRGB(p1, p2, p3);
-            lastCommandedState = STATE_BREATHE_SLOW;
-            lastCommandedColor = targetColor;
-            lastHeartbeat = millis();
+        case CMD_BREATHE_SLOW:
+            setPresenceState(STATE_BREATHE_SLOW, CRGB(p1, p2, p3));
             break;
-        case 0x06: // BRIGHTNESS
+        case CMD_BRIGHTNESS:
             FastLED.setBrightness(p1);
             showSolid(lastLogicalColor, true); // Re-push the cached color at the new brightness
             markHostAlive();
             break;
-        case 0x07: // TRANSITION
+        case CMD_TRANSITION:
             transitionDurationMs = ((uint16_t)p1 << 8) | p2;
-            if (transitionDurationMs > 10000) transitionDurationMs = 10000;
+            if (transitionDurationMs > MAX_TRANSITION_MS) transitionDurationMs = MAX_TRANSITION_MS;
             markHostAlive();
             break;
-        case 0x08: // RESET
+        case CMD_RESET:
             ESP.restart();
             break;
-        case 0x09: // BOOTLOADER
-            usbManager.sendResponse(0x02, 0);
+        case CMD_BOOTLOADER:
+            usbManager.sendResponse(STATUS_OK, 0);
             delay(250);
             USB_SERIAL_JTAG.conf0.phy_sel = 0;
             USB_SERIAL_JTAG.conf0.pad_pull_override = 0;
@@ -273,37 +269,41 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
             REG_WRITE(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_SW_SYS_RST);
             for (;;) delay(1000);
-        case 0x0A: // VERSION
+        case CMD_VERSION:
+            markHostAlive();
             usbManager.sendVersion(FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH, HW_VARIANT);
             return; // Skip default 2-byte response
-        case 0x0B: // GET_CALIBRATION
+        case CMD_GET_CALIBRATION:
             markHostAlive();
             usbManager.sendCalibration(calibration.redGain, calibration.greenGain,
                                        calibration.blueGain, calibration.gammaTenths);
             return;
-        case 0x0C: // PREVIEW_CALIBRATION
+        case CMD_PREVIEW_CALIBRATION:
             calibration = clampCalibration({p1, p2, p3, p4});
             showSolid(lastLogicalColor, true);
             markHostAlive();
             break;
-        case 0x0D: // SAVE_CALIBRATION
+        case CMD_SAVE_CALIBRATION:
             saveCalibration();
-            if (currentState == STATE_CALIBRATION_TEST) {
-                startStateTransition();
-                currentState = lastCommandedState;
-                targetColor = lastCommandedColor;
-            }
+            exitCalibrationTest();
             markHostAlive();
             break;
-        case 0x0E: // CALIBRATION_TEST_PATTERN
+        case CMD_CALIBRATION_TEST:
             markHostAlive();
+            if (p1 == CAL_TEST_EXIT) {
+                // Discard the previewed profile and show the stored one again.
+                loadCalibration();
+                exitCalibrationTest();
+                showSolid(lastLogicalColor, true);
+                break;
+            }
             isTransitioning = false;
             currentState = STATE_CALIBRATION_TEST;
-            calibrationTestColor = p1 == 1 ? CRGB(128, 128, 128) : CRGB::White;
+            calibrationTestColor = p1 == CAL_TEST_MID_GRAY ? CRGB(128, 128, 128) : CRGB::White;
             showSolid(calibrationTestColor, true);
             break;
         default:
-            response[0] = 0xFF; // ERR
+            response[0] = STATUS_ERROR;
             break;
     }
 
@@ -330,11 +330,13 @@ void loop() {
     unsigned long now = millis();
     if (now - lastUsbKeepalive >= 1000) {
         lastUsbKeepalive = now;
-        usbManager.sendResponse(0x00, 0);
+        // Keepalive carries the dropped-command count so a flooding host is visible.
+        usbManager.sendResponse(STATUS_KEEPALIVE, usbManager.takeDroppedCommandCount());
     }
 
     // 2. Watchdog Check — any command resets the timer
     if (currentState != STATE_DISCONNECTED && now - lastHeartbeat > WATCHDOG_TIMEOUT) {
+        startStateTransition();
         currentState = STATE_DISCONNECTED;
         breatheAngle = 0;
     }

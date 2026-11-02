@@ -46,11 +46,14 @@ public:
     // Dispatch queued commands to the callback; call from loop()
     void loop();
 
-    QueueHandle_t cmdQueue;
+    // Commands dropped because the queue was full since the last call; resets the counter.
+    uint8_t takeDroppedCommandCount();
 
 private:
     CustomUSBHIDVendor vendor;
     UsbCommandCallback cmdCallback;
+    QueueHandle_t cmdQueue;
+    volatile uint8_t droppedCommands = 0;
     static UsbManager* instance;
     friend class CustomUSBHIDVendor;
 };

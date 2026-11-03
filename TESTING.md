@@ -12,7 +12,7 @@ Depending on what components were modified, you only need to run the relevant te
 
 ## Hardware Setup
 - Connect the **Seeed XIAO ESP32-S3** to your computer via USB.
-- Verify the **WS2812B LEDs** are connected properly (the firmware defaults to an 8-LED chain; the count is configurable from 1 to 64 in the bridge settings and stored on the device):
+- Verify the **WS2812B or SK6812 RGBW LEDs** are connected properly (the firmware defaults to an 8-LED WS2812B chain; the count (1-64) and LED type are configurable in the bridge settings and stored on the device):
   - Data pin to **GPIO 2** on the ESP32-S3.
   - Power (5V) and Ground (GND) are securely connected.
 
@@ -72,6 +72,13 @@ Use the command line to run the Rust bridge application. Ensure the firmware is 
    - Set the slider to the physical chain length and select **Save to device**; verify "Saved on device" updates. Reconnect or power-cycle the device and verify the boot animation and presence color use the saved count, and that `config.json` contains no LED count.
    - Run `cargo run --example hid_cmd -- set_led_count 0` and verify the reply is `ERROR`; run `get_led_count` and verify the count is unchanged.
    - Connect firmware older than 0.7.1; verify the section reports that newer firmware is required while presence control keeps working.
+8. **LED Type Check:**
+   - With firmware 0.7.2 or newer connected, verify the **LED Hardware** section shows the **LED type** dropdown with WS2812B and the three SK6812 variants, and "Saved on device" matching the lamp (WS2812B on a fresh device).
+   - With an SK6812 RGBW strip attached, select its variant; verify the presence color is re-sent immediately in the correct colors (a wrong type shows shifted colors or dark trailing pixels). Set a white presence color or the **White** calibration pattern and verify only the white die lights; a saturated color such as green must not light the white die.
+   - Select **Cancel**; verify the dropdown and the number of LEDs snap back to the saved values and the LEDs match them.
+   - Select the correct type and **Save to device**; verify both "Saved on device" labels update. Power-cycle the device and verify the boot animation and presence color use the saved type and count, and that `config.json` contains neither.
+   - Run `cargo run --example hid_cmd -- set_led_type 4` and verify the reply is `ERROR`; run `get_led_type` and verify the active type is unchanged and `count` is `4`.
+   - Connect firmware 0.7.1; verify the LED count slider still works while the section reports that the LED type selector needs firmware 0.7.2.
 
 ---
 

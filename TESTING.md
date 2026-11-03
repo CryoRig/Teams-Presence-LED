@@ -12,7 +12,7 @@ Depending on what components were modified, you only need to run the relevant te
 
 ## Hardware Setup
 - Connect the **Seeed XIAO ESP32-S3** to your computer via USB.
-- Verify the **WS2812B LEDs** (8-LED chain) are connected properly:
+- Verify the **WS2812B LEDs** are connected properly (the firmware defaults to an 8-LED chain; the count is configurable from 1 to 64 in the bridge settings and stored on the device):
   - Data pin to **GPIO 2** on the ESP32-S3.
   - Power (5V) and Ground (GND) are securely connected.
 
@@ -65,6 +65,13 @@ Use the command line to run the Rust bridge application. Ensure the firmware is 
    - While white calibration is active, stop the bridge and verify the normal disconnected breathing animation starts after 60 seconds.
    - Select **Reset to neutral**, verify the output returns to the uncorrected appearance, and reconnect to confirm the neutral profile persisted.
    - Connect firmware older than calibration support; verify the UI reports unsupported while presence, brightness, transitions, and heartbeat continue working.
+7. **LED Count Check:**
+   - With firmware 0.7.1 or newer connected, open the settings window and verify the **LED Hardware** section shows the **Number of LEDs** slider and "Saved on device" matching the lamp (8 on a fresh device).
+   - Lower the slider below the physical chain length; verify the trailing LEDs turn off immediately and the remaining LEDs keep the presence color. Raise it again and verify they light up.
+   - Select **Cancel**; verify the slider snaps back to the saved count and the LEDs match it.
+   - Set the slider to the physical chain length and select **Save to device**; verify "Saved on device" updates. Reconnect or power-cycle the device and verify the boot animation and presence color use the saved count, and that `config.json` contains no LED count.
+   - Run `cargo run --example hid_cmd -- set_led_count 0` and verify the reply is `ERROR`; run `get_led_count` and verify the count is unchanged.
+   - Connect firmware older than 0.7.1; verify the section reports that newer firmware is required while presence control keeps working.
 
 ---
 

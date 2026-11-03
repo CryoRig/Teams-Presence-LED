@@ -235,7 +235,7 @@ Re-audit 2026-07-25: every issue re-verified against source; [VERIFIED-2026-07-2
 
 ### I2 [DONE][VERIFIED-2026-07-25] 8 WS2812B at full white exceed 480mA budget by design
 - WHERE: firmware/src/main.cpp:24-26 — 8 LEDs × ~60mA = 480mA = exactly the cap; FastLED will dim whites. Expected behavior; document that white states render dimmer.
-- STATUS: documented in firmware/src/main.cpp comments.
+- STATUS: documented in firmware/src/main.cpp comments. Since firmware 0.7.1 the LED count is user-configurable (1-64, stored on the device); longer chains are dimmed further by the same power limiter.
 - VERIFIED: 2026-07-25 — setMaxPower comment notes "full white will be dimmed by FastLED to meet this budget".
 
 ### I3 [DONE][VERIFIED-2026-11-02] hid.rs comment/enum duplication of report ID

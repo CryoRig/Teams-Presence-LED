@@ -17,6 +17,7 @@ This project consists of two parts:
 - **No Cloud Required**: Parses local Teams log files for presence information.
 - **Auto-Reconnect**: The bridge uses USB HID for reliable, driverless communication and reconnects if unplugged.
 - **Customizable Colors**: Configure LED colors and animations for each presence state via the tray app settings.
+- **Device-Stored Hardware Settings**: Color calibration and the number of LEDs in the chain (1-64) are configured from the tray app but saved on the lamp itself, so they follow the device rather than the PC.
 - **Hardware Watchdog**: If the bridge application crashes or the computer sleeps, the device enters a disconnected state with a moderate white pulse after 60 seconds of no heartbeat.
 
 ## Documentation

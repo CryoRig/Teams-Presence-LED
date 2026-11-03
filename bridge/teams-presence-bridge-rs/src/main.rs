@@ -283,6 +283,7 @@ fn run_bridge_loop(
             {
                 let device_calibration = manager.query_calibration().map(hid::CalibrationProfile::normalized);
                 let device_led_count = manager.query_led_count();
+                let device_led_type = manager.query_led_type();
                 {
                     let mut state = calibration.lock_or_recover();
                     state.connected = true;
@@ -299,6 +300,11 @@ fn run_bridge_loop(
                         state.led_count.apply(info);
                     }
                     state.led_count.clear_pending();
+                    state.led_type.supported = Some(device_led_type.is_some());
+                    if let Some(info) = device_led_type {
+                        state.led_type.apply(info);
+                    }
+                    state.led_type.clear_pending();
                 }
                 let c = config.lock_or_recover();
                 manager.send_brightness(c.brightness);
@@ -410,6 +416,7 @@ fn run_bridge_loop(
                 state.connected = false;
                 state.supported = None;
                 state.led_count.supported = None;
+                state.led_type.supported = None;
             }
         }
 
@@ -489,6 +496,34 @@ fn run_bridge_loop(
                         calibration.lock_or_recover().led_count.apply(info);
                     }
                 }
+            }
+
+        let led_type_actions = {
+            let mut state = calibration.lock_or_recover();
+            if state.connected && state.led_type.supported == Some(true) {
+                let snapshot = state.led_type;
+                state.led_type.clear_pending();
+                Some(snapshot)
+            } else {
+                None
+            }
+        };
+        if let (Some(h), Some(led)) = (hid_manager.as_mut(), led_type_actions)
+            && h.is_connected() {
+                if led.cancel_pending {
+                    h.set_led_type(led.saved, false);
+                } else {
+                    if led.preview_pending && !led.save_pending {
+                        h.set_led_type(led.selected, false);
+                    }
+                    if led.save_pending {
+                        h.set_led_type(led.selected, true);
+                    }
+                }
+                if (led.cancel_pending || led.save_pending)
+                    && let Some(info) = h.query_led_type() {
+                        calibration.lock_or_recover().led_type.apply(info);
+                    }
             }
         if status_changed
             && let Some(ctx) = ctx.lock_or_recover().as_ref() {

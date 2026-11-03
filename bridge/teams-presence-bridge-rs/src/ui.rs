@@ -327,24 +327,55 @@ impl eframe::App for TeamsBridgeApp {
                 {
                     let mut calibration = self.calibration.lock_or_recover();
                     let connected = calibration.connected;
-                    let led = &mut calibration.led_count;
-                    match (connected, led.supported) {
-                        (false, _) => { ui.label("Connect an LED device to configure its LED count."); }
-                        (true, Some(false)) => { ui.label("LED count configuration requires firmware 0.7.1 or newer."); }
+                    let hw = &mut *calibration;
+                    match (connected, hw.led_count.supported) {
+                        (false, _) => { ui.label("Connect an LED device to configure its LED hardware."); }
+                        (true, Some(false)) => { ui.label("LED hardware configuration requires firmware 0.7.1 or newer."); }
                         (true, _) => {
+                            let led = &mut hw.led_count;
                             let max = led.max;
                             if ui.add(egui::Slider::new(&mut led.count, 1..=max).text("Number of LEDs")).changed() {
                                 led.preview_pending = true;
                             }
                             ui.label(format!("Saved on device: {}", led.saved));
+
+                            ui.add_space(5.0);
+                            let kind = &mut hw.led_type;
+                            if kind.supported == Some(false) {
+                                ui.label("LED type selection requires firmware 0.7.2 or newer.");
+                            } else {
+                                egui::ComboBox::from_label("LED type")
+                                    .selected_text(crate::hid::led_type_name(kind.selected))
+                                    .show_ui(ui, |ui| {
+                                        for id in 0..kind.count {
+                                            if ui.selectable_value(&mut kind.selected, id, crate::hid::led_type_name(id)).changed() {
+                                                kind.preview_pending = true;
+                                            }
+                                        }
+                                    });
+                                ui.label(format!("Saved on device: {}", crate::hid::led_type_name(kind.saved)));
+                                if kind.restart_required {
+                                    ui.label("Restart the lamp to apply this LED type.");
+                                }
+                            }
+
+                            ui.add_space(5.0);
                             ui.horizontal(|ui| {
                                 if ui.button("Save to device").clicked() {
-                                    led.save_pending = true;
+                                    hw.led_count.save_pending = true;
+                                    if hw.led_type.supported == Some(true) {
+                                        hw.led_type.save_pending = true;
+                                    }
                                 }
-                                if ui.button("Cancel").on_hover_text("Revert to the LED count saved on the device").clicked() {
-                                    led.preview_pending = false;
-                                    led.save_pending = false;
-                                    led.cancel_pending = true;
+                                if ui.button("Cancel").on_hover_text("Revert to the LED hardware settings saved on the device").clicked() {
+                                    hw.led_count.preview_pending = false;
+                                    hw.led_count.save_pending = false;
+                                    hw.led_count.cancel_pending = true;
+                                    if hw.led_type.supported == Some(true) {
+                                        hw.led_type.preview_pending = false;
+                                        hw.led_type.save_pending = false;
+                                        hw.led_type.cancel_pending = true;
+                                    }
                                 }
                             });
                             ui.label("LED Brightness limited by 5V / 480mA USB power limit.");

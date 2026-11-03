@@ -22,11 +22,14 @@ const CMD_SAVE_CALIBRATION: u8 = 0x0D;
 const CMD_CALIBRATION_TEST: u8 = 0x0E;
 const CMD_GET_LED_COUNT: u8 = 0x0F;
 const CMD_SET_LED_COUNT: u8 = 0x10;
+const CMD_GET_LED_TYPE: u8 = 0x11;
+const CMD_SET_LED_TYPE: u8 = 0x12;
 
 // Response status codes
 const STATUS_PONG: u8 = 0x01;
 const STATUS_CALIBRATION: u8 = CMD_GET_CALIBRATION;
 const STATUS_LED_COUNT: u8 = CMD_GET_LED_COUNT;
+const STATUS_LED_TYPE: u8 = CMD_GET_LED_TYPE;
 
 // CMD_CALIBRATION_TEST P1 value that exits the pattern and reloads the saved profile.
 const CALIBRATION_TEST_EXIT: u8 = 0xFF;
@@ -34,6 +37,24 @@ const CALIBRATION_TEST_EXIT: u8 = 0xFF;
 // CMD_SET_LED_COUNT P2 selectors.
 const LED_COUNT_PREVIEW: u8 = 0;
 const LED_COUNT_PERSIST: u8 = 1;
+
+// CMD_SET_LED_TYPE P2 selectors and GET reply flag bits.
+const LED_TYPE_PREVIEW: u8 = 0;
+const LED_TYPE_PERSIST: u8 = 1;
+const LED_TYPE_FLAG_RESTART_REQUIRED: u8 = 0x01;
+
+/// Display names indexed by the firmware's LedType id (protocol.md).
+pub const LED_TYPE_NAMES: &[&str] = &[
+    "WS2812B (RGB)",
+    "SK6812 RGBW (cool white)",
+    "SK6812 RGBNW (neutral white)",
+    "SK6812 RGBWW (warm white)",
+];
+
+/// Name for a type id, falling back to a generic label for ids newer than this bridge.
+pub fn led_type_name(id: u8) -> String {
+    LED_TYPE_NAMES.get(id as usize).map_or_else(|| format!("Type {}", id), |name| (*name).to_string())
+}
 
 const PONG_TIMEOUT: Duration = Duration::from_millis(100);
 const QUERY_TIMEOUT: Duration = Duration::from_millis(500);
@@ -91,6 +112,7 @@ pub struct CalibrationState {
     pub cancel_pending: bool,
     pub test_pattern: CalibrationTestPattern,
     pub led_count: LedCountState,
+    pub led_type: LedTypeState,
 }
 
 /// Reply payload of CMD_GET_LED_COUNT.
@@ -130,6 +152,65 @@ impl LedCountState {
         self.count = info.active;
         self.saved = info.saved;
         self.max = info.max.max(1);
+    }
+
+    pub fn clear_pending(&mut self) {
+        self.preview_pending = false;
+        self.save_pending = false;
+        self.cancel_pending = false;
+    }
+}
+
+/// Reply payload of CMD_GET_LED_TYPE.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LedTypeInfo {
+    pub active: u8,
+    pub saved: u8,
+    /// Number of type ids the firmware knows; valid ids are `0..count`.
+    pub count: u8,
+    pub flags: u8,
+}
+
+impl LedTypeInfo {
+    fn from_payload([active, saved, count, flags]: [u8; 4]) -> Self {
+        Self { active, saved, count, flags }
+    }
+}
+
+/// Device-stored LED chipset; `supported` is `None` until the device has been queried.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LedTypeState {
+    pub supported: Option<bool>,
+    pub selected: u8,
+    pub saved: u8,
+    pub count: u8,
+    pub restart_required: bool,
+    pub preview_pending: bool,
+    pub save_pending: bool,
+    pub cancel_pending: bool,
+}
+
+impl Default for LedTypeState {
+    fn default() -> Self {
+        Self {
+            supported: None,
+            selected: 0,
+            saved: 0,
+            count: 1,
+            restart_required: false,
+            preview_pending: false,
+            save_pending: false,
+            cancel_pending: false,
+        }
+    }
+}
+
+impl LedTypeState {
+    pub fn apply(&mut self, info: LedTypeInfo) {
+        self.selected = info.active;
+        self.saved = info.saved;
+        self.count = info.count.max(1);
+        self.restart_required = info.flags & LED_TYPE_FLAG_RESTART_REQUIRED != 0;
     }
 
     pub fn clear_pending(&mut self) {
@@ -307,6 +388,18 @@ impl HidManager {
         self.send_report(CMD_SET_LED_COUNT, count.max(1), mode, 0, 0);
     }
 
+    pub fn query_led_type(&mut self) -> Option<LedTypeInfo> {
+        self.send_report(CMD_GET_LED_TYPE, 0, 0, 0, 0);
+        // Firmware before 0.7.2 answers 0xFF; the wait times out and reports unsupported.
+        self.wait_for_status(STATUS_LED_TYPE, QUERY_TIMEOUT).map(LedTypeInfo::from_payload)
+    }
+
+    /// Switch the active chipset; `persist` also stores the type in the device's NVS.
+    pub fn set_led_type(&mut self, led_type: u8, persist: bool) {
+        let mode = if persist { LED_TYPE_PERSIST } else { LED_TYPE_PREVIEW };
+        self.send_report(CMD_SET_LED_TYPE, led_type, mode, 0, 0);
+    }
+
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
         self.send_report(CMD_VERSION, 0, 0, 0, 0);
         self.wait_for_status(CMD_VERSION, QUERY_TIMEOUT)
@@ -368,5 +461,36 @@ mod tests {
         assert_eq!((state.count, state.saved, state.max), (3, 8, 64));
         state.apply(LedCountInfo { active: 1, saved: 1, max: 0 });
         assert_eq!(state.max, 1);
+    }
+
+    #[test]
+    fn led_type_opcodes_match_firmware_protocol() {
+        assert_eq!(CMD_GET_LED_TYPE, 0x11);
+        assert_eq!(CMD_SET_LED_TYPE, 0x12);
+        assert_eq!(STATUS_LED_TYPE, CMD_GET_LED_TYPE);
+        assert_eq!((LED_TYPE_PREVIEW, LED_TYPE_PERSIST), (0, 1));
+        assert_eq!(LED_TYPE_FLAG_RESTART_REQUIRED, 0x01);
+    }
+
+    #[test]
+    fn led_type_reply_payload_maps_fields_and_flags() {
+        let info = LedTypeInfo::from_payload([2, 0, 4, 0]);
+        assert_eq!(info, LedTypeInfo { active: 2, saved: 0, count: 4, flags: 0 });
+        let mut state = LedTypeState::default();
+        assert_eq!(state.supported, None);
+        assert!(!state.preview_pending && !state.save_pending && !state.cancel_pending);
+        state.apply(info);
+        assert_eq!((state.selected, state.saved, state.count), (2, 0, 4));
+        assert!(!state.restart_required);
+        state.apply(LedTypeInfo { active: 1, saved: 1, count: 0, flags: 0x01 });
+        assert_eq!(state.count, 1);
+        assert!(state.restart_required);
+    }
+
+    #[test]
+    fn led_type_names_cover_known_ids_and_fall_back() {
+        assert_eq!(led_type_name(0), "WS2812B (RGB)");
+        assert_eq!(led_type_name(2), "SK6812 RGBNW (neutral white)");
+        assert_eq!(led_type_name(LED_TYPE_NAMES.len() as u8), format!("Type {}", LED_TYPE_NAMES.len()));
     }
 }

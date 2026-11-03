@@ -6,6 +6,7 @@
 //!           brightness N | transition MS | reset | bootloader | version |
 //!           get_calibration | preview_calibration R G B GAMMA_TENTHS | save_calibration |
 //!           calibration_test 0|1|255 | get_led_count | set_led_count N [0=preview|1=persist] |
+//!           get_led_type | set_led_type ID [0=preview|1=persist] |
 //!           raw CMD P1 P2 P3 P4
 //!
 //! Watchdog-recovery test (ISSUES.md O2): stop the bridge, then
@@ -50,6 +51,8 @@ fn main() {
         "calibration_test" => (0x0E, p(1), 0, 0, 0),
         "get_led_count" => (0x0F, 0, 0, 0, 0),
         "set_led_count" => (0x10, p(1), p(2), 0, 0),
+        "get_led_type" => (0x11, 0, 0, 0, 0),
+        "set_led_type" => (0x12, p(1), p(2), 0, 0),
         "raw" => (p(1), p(2), p(3), p(4), p(5)),
         other => {
             eprintln!("unknown command '{}'", other);
@@ -84,6 +87,7 @@ fn main() {
                 0x0A if n >= 6 => println!("Reply: VERSION v{}.{}.{} variant {}", buf[2], buf[3], buf[4], buf[5]),
                 0x0B if n >= 6 => println!("Reply: CALIBRATION gains R{} G{} B{} gamma {:.1}", buf[2], buf[3], buf[4], buf[5] as f32 / 10.0),
                 0x0F if n >= 5 => println!("Reply: LED_COUNT active {} saved {} max {}", buf[2], buf[3], buf[4]),
+                0x11 if n >= 6 => println!("Reply: LED_TYPE active {} saved {} count {} flags 0x{:02X}", buf[2], buf[3], buf[4], buf[5]),
                 0xFF => println!("Reply: ERROR (unknown command)"),
                 other => println!("Reply: 0x{:02X}", other),
             }

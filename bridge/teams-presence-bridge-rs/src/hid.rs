@@ -20,13 +20,20 @@ const CMD_GET_CALIBRATION: u8 = 0x0B;
 const CMD_PREVIEW_CALIBRATION: u8 = 0x0C;
 const CMD_SAVE_CALIBRATION: u8 = 0x0D;
 const CMD_CALIBRATION_TEST: u8 = 0x0E;
+const CMD_GET_LED_COUNT: u8 = 0x0F;
+const CMD_SET_LED_COUNT: u8 = 0x10;
 
 // Response status codes
 const STATUS_PONG: u8 = 0x01;
 const STATUS_CALIBRATION: u8 = CMD_GET_CALIBRATION;
+const STATUS_LED_COUNT: u8 = CMD_GET_LED_COUNT;
 
 // CMD_CALIBRATION_TEST P1 value that exits the pattern and reloads the saved profile.
 const CALIBRATION_TEST_EXIT: u8 = 0xFF;
+
+// CMD_SET_LED_COUNT P2 selectors.
+const LED_COUNT_PREVIEW: u8 = 0;
+const LED_COUNT_PERSIST: u8 = 1;
 
 const PONG_TIMEOUT: Duration = Duration::from_millis(100);
 const QUERY_TIMEOUT: Duration = Duration::from_millis(500);
@@ -83,6 +90,53 @@ pub struct CalibrationState {
     pub test_pending: bool,
     pub cancel_pending: bool,
     pub test_pattern: CalibrationTestPattern,
+    pub led_count: LedCountState,
+}
+
+/// Reply payload of CMD_GET_LED_COUNT.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LedCountInfo {
+    pub active: u8,
+    pub saved: u8,
+    pub max: u8,
+}
+
+impl LedCountInfo {
+    fn from_payload([active, saved, max, _]: [u8; 4]) -> Self {
+        Self { active, saved, max }
+    }
+}
+
+/// Device-stored LED chain length; `supported` is `None` until the device has been queried.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LedCountState {
+    pub supported: Option<bool>,
+    pub count: u8,
+    pub saved: u8,
+    pub max: u8,
+    pub preview_pending: bool,
+    pub save_pending: bool,
+    pub cancel_pending: bool,
+}
+
+impl Default for LedCountState {
+    fn default() -> Self {
+        Self { supported: None, count: 8, saved: 8, max: 64, preview_pending: false, save_pending: false, cancel_pending: false }
+    }
+}
+
+impl LedCountState {
+    pub fn apply(&mut self, info: LedCountInfo) {
+        self.count = info.active;
+        self.saved = info.saved;
+        self.max = info.max.max(1);
+    }
+
+    pub fn clear_pending(&mut self) {
+        self.preview_pending = false;
+        self.save_pending = false;
+        self.cancel_pending = false;
+    }
 }
 
 // Consecutive pings without PONG before the device is considered gone
@@ -241,6 +295,18 @@ impl HidManager {
         self.send_report(CMD_CALIBRATION_TEST, CALIBRATION_TEST_EXIT, 0, 0, 0);
     }
 
+    pub fn query_led_count(&mut self) -> Option<LedCountInfo> {
+        self.send_report(CMD_GET_LED_COUNT, 0, 0, 0, 0);
+        // Firmware before 0.7.1 answers 0xFF; the wait times out and reports unsupported.
+        self.wait_for_status(STATUS_LED_COUNT, QUERY_TIMEOUT).map(LedCountInfo::from_payload)
+    }
+
+    /// Resize the active chain; `persist` also stores the count in the device's NVS.
+    pub fn set_led_count(&mut self, count: u8, persist: bool) {
+        let mode = if persist { LED_COUNT_PERSIST } else { LED_COUNT_PREVIEW };
+        self.send_report(CMD_SET_LED_COUNT, count.max(1), mode, 0, 0);
+    }
+
     pub fn query_firmware_version(&mut self) -> Option<(u8, u8, u8, u8)> {
         self.send_report(CMD_VERSION, 0, 0, 0, 0);
         self.wait_for_status(CMD_VERSION, QUERY_TIMEOUT)
@@ -281,5 +347,26 @@ mod tests {
         assert_eq!(extreme.normalized(), CalibrationProfile { red_gain: 100, green_gain: 100, blue_gain: 25, gamma_tenths: 10 });
         let in_range = CalibrationProfile { red_gain: 80, green_gain: 100, blue_gain: 90, gamma_tenths: 10 };
         assert_eq!(in_range.normalized(), in_range);
+    }
+
+    #[test]
+    fn led_count_opcodes_match_firmware_protocol() {
+        assert_eq!(CMD_GET_LED_COUNT, 0x0F);
+        assert_eq!(CMD_SET_LED_COUNT, 0x10);
+        assert_eq!(STATUS_LED_COUNT, CMD_GET_LED_COUNT);
+        assert_eq!((LED_COUNT_PREVIEW, LED_COUNT_PERSIST), (0, 1));
+    }
+
+    #[test]
+    fn led_count_reply_payload_maps_active_saved_max() {
+        let info = LedCountInfo::from_payload([3, 8, 64, 0]);
+        assert_eq!(info, LedCountInfo { active: 3, saved: 8, max: 64 });
+        let mut state = LedCountState::default();
+        assert_eq!(state.supported, None);
+        assert!(!state.preview_pending && !state.save_pending && !state.cancel_pending);
+        state.apply(info);
+        assert_eq!((state.count, state.saved, state.max), (3, 8, 64));
+        state.apply(LedCountInfo { active: 1, saved: 1, max: 0 });
+        assert_eq!(state.max, 1);
     }
 }

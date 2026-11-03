@@ -322,6 +322,37 @@ impl eframe::App for TeamsBridgeApp {
                 }
 
                 ui.add_space(20.0);
+                ui.heading("LED Hardware");
+                ui.add_space(5.0);
+                {
+                    let mut calibration = self.calibration.lock_or_recover();
+                    let connected = calibration.connected;
+                    let led = &mut calibration.led_count;
+                    match (connected, led.supported) {
+                        (false, _) => { ui.label("Connect an LED device to configure its LED count."); }
+                        (true, Some(false)) => { ui.label("LED count configuration requires firmware 0.7.1 or newer."); }
+                        (true, _) => {
+                            let max = led.max;
+                            if ui.add(egui::Slider::new(&mut led.count, 1..=max).text("Number of LEDs")).changed() {
+                                led.preview_pending = true;
+                            }
+                            ui.label(format!("Saved on device: {}", led.saved));
+                            ui.horizontal(|ui| {
+                                if ui.button("Save to device").clicked() {
+                                    led.save_pending = true;
+                                }
+                                if ui.button("Cancel").on_hover_text("Revert to the LED count saved on the device").clicked() {
+                                    led.preview_pending = false;
+                                    led.save_pending = false;
+                                    led.cancel_pending = true;
+                                }
+                            });
+                            ui.label("LED Brightness limited by 5V / 480mA USB power limit.");
+                        }
+                    }
+                }
+
+                ui.add_space(20.0);
                 ui.heading("Presence Mapping");
                 ui.add_space(10.0);
                 

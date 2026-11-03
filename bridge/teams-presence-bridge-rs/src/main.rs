@@ -282,6 +282,7 @@ fn run_bridge_loop(
                 && manager.connect()
             {
                 let device_calibration = manager.query_calibration().map(hid::CalibrationProfile::normalized);
+                let device_led_count = manager.query_led_count();
                 {
                     let mut state = calibration.lock_or_recover();
                     state.connected = true;
@@ -293,6 +294,11 @@ fn run_bridge_loop(
                     state.save_pending = false;
                     state.test_pending = false;
                     state.cancel_pending = false;
+                    state.led_count.supported = Some(device_led_count.is_some());
+                    if let Some(info) = device_led_count {
+                        state.led_count.apply(info);
+                    }
+                    state.led_count.clear_pending();
                 }
                 let c = config.lock_or_recover();
                 manager.send_brightness(c.brightness);
@@ -403,6 +409,7 @@ fn run_bridge_loop(
             if state.connected {
                 state.connected = false;
                 state.supported = None;
+                state.led_count.supported = None;
             }
         }
 
@@ -450,6 +457,36 @@ fn run_bridge_loop(
                     }
                     if test {
                         h.start_calibration_test(pattern);
+                    }
+                }
+            }
+
+        let led_count_actions = {
+            let mut state = calibration.lock_or_recover();
+            if state.connected && state.led_count.supported == Some(true) {
+                let snapshot = state.led_count;
+                state.led_count.clear_pending();
+                Some(snapshot)
+            } else {
+                None
+            }
+        };
+        if let (Some(h), Some(led)) = (hid_manager.as_mut(), led_count_actions)
+            && h.is_connected() {
+                if led.cancel_pending {
+                    h.set_led_count(led.saved, false);
+                } else {
+                    if led.preview_pending && !led.save_pending {
+                        h.set_led_count(led.count, false);
+                    }
+                    if led.save_pending {
+                        h.set_led_count(led.count, true);
+                    }
+                }
+                if led.cancel_pending || led.save_pending {
+                    // Re-read so the UI shows what the device actually holds.
+                    if let Some(info) = h.query_led_count() {
+                        calibration.lock_or_recover().led_count.apply(info);
                     }
                 }
             }

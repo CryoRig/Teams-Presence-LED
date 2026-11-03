@@ -18,7 +18,7 @@ UsbManager usbManager;
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 7
-#define FW_VERSION_PATCH 1
+#define FW_VERSION_PATCH 2
 // Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
 #define HW_VARIANT 1
 
@@ -43,6 +43,29 @@ uint8_t ledCount = DEFAULT_LED_COUNT;
 uint8_t savedLedCount = DEFAULT_LED_COUNT;
 CLEDController* ledController = nullptr;
 Preferences hardwarePreferences;
+
+// Signal family a controller is instantiated for. Chipsets whose timing is not WS2812-compatible
+// need a new driver here plus a controller selected in setup(); switching drivers requires a restart.
+enum LedDriver : uint8_t {
+    LED_DRIVER_WS2812_800K,
+};
+
+struct LedTypeSpec {
+    LedDriver driver;
+    uint8_t channels;     // 3 = RGB, 4 = RGBW
+    uint16_t whiteKelvin; // nominal CCT of the W die; informational until a colorimetric mode is used
+};
+
+// Indexed by proto::LedType. SK6812 timing is interoperable with the WS2812 driver.
+static const LedTypeSpec LED_TYPES[LED_TYPE_COUNT] = {
+    /* LED_TYPE_WS2812B      */ {LED_DRIVER_WS2812_800K, 3, 0},
+    /* LED_TYPE_SK6812_RGBW  */ {LED_DRIVER_WS2812_800K, 4, 6000},
+    /* LED_TYPE_SK6812_RGBNW */ {LED_DRIVER_WS2812_800K, 4, 4500},
+    /* LED_TYPE_SK6812_RGBWW */ {LED_DRIVER_WS2812_800K, 4, 3000},
+};
+static const LedDriver BOOTED_DRIVER = LED_DRIVER_WS2812_800K;
+uint8_t ledType = LED_TYPE_WS2812B;
+uint8_t savedLedType = LED_TYPE_WS2812B;
 
 enum State {
     STATE_OFF,
@@ -183,6 +206,42 @@ void applyLedCount(uint8_t count) {
     }
     ledCount = count;
     if (ledController) ledController->setLeds(leds, ledCount);
+}
+
+bool isValidLedType(uint8_t type) {
+    return type < LED_TYPE_COUNT;
+}
+
+void loadLedType() {
+    hardwarePreferences.begin("led-hw", true);
+    uint8_t stored = hardwarePreferences.getUChar("type", LED_TYPE_WS2812B);
+    hardwarePreferences.end();
+    savedLedType = isValidLedType(stored) ? stored : LED_TYPE_WS2812B;
+    ledType = savedLedType;
+}
+
+void saveLedType() {
+    savedLedType = ledType;
+    hardwarePreferences.begin("led-hw", false);
+    hardwarePreferences.putUChar("type", savedLedType);
+    hardwarePreferences.end();
+}
+
+// The RMT5 driver re-reads the controller's RGBW setting every frame, so RGB<->RGBW switches live.
+void applyLedType(uint8_t type) {
+    if (!isValidLedType(type)) return;
+    ledType = type;
+    if (!ledController) return;
+    const LedTypeSpec& spec = LED_TYPES[type];
+    if (spec.channels == 4) {
+        ledController->setRgbw(fl::Rgbw(spec.whiteKelvin, fl::RGBW_MODE::kRGBWExactColors));
+    } else {
+        ledController->clearWhiteChannel();
+    }
+}
+
+uint8_t ledTypeFlags() {
+    return LED_TYPES[ledType].driver != BOOTED_DRIVER ? LED_TYPE_FLAG_RESTART_REQUIRED : 0;
 }
 
 void showBootColors() {
@@ -373,6 +432,20 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             if (p2 == LED_COUNT_PERSIST) saveLedCount();
             showSolid(lastLogicalColor, true);
             break;
+        case CMD_GET_LED_TYPE:
+            markHostAlive();
+            usbManager.sendLedType(ledType, savedLedType, LED_TYPE_COUNT, ledTypeFlags());
+            return;
+        case CMD_SET_LED_TYPE:
+            markHostAlive();
+            if (!isValidLedType(p1)) {
+                response[0] = STATUS_ERROR;
+                break;
+            }
+            applyLedType(p1);
+            if (p2 == LED_TYPE_PERSIST) saveLedType();
+            showSolid(lastLogicalColor, true);
+            break;
         default:
             response[0] = STATUS_ERROR;
             break;
@@ -387,6 +460,8 @@ void setup() {
     loadLedCount();
     ledController = &FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, MAX_LEDS);
     ledController->setLeds(leds, ledCount);
+    loadLedType();
+    applyLedType(savedLedType);
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 480mA for USB safety (note: full white will be dimmed by FastLED to meet this budget)
     FastLED.setBrightness(BRIGHTNESS);
     loadCalibration();

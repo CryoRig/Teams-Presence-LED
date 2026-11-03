@@ -46,6 +46,9 @@ public:
     // Send the active, saved, and maximum LED count (5-byte payload).
     void sendLedCount(uint8_t active, uint8_t saved, uint8_t maximum);
 
+    // Send the active and saved LED type, the number of known types, and flags (5-byte payload).
+    void sendLedType(uint8_t active, uint8_t saved, uint8_t count, uint8_t flags);
+
     // Dispatch queued commands to the callback; call from loop()
     void loop();
 

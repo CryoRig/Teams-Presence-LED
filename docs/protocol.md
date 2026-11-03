@@ -105,7 +105,7 @@ Shows steady white or mid-gray using the active calibration profile until Save L
 - **Response:** Standard `0x02` OK.
 
 ### 0x0F: Get LED Count
-Returns the length of the WS2812B chain the device currently drives. The count lives in the device's NVS, not in the bridge configuration, so it stays with the physical lamp.
+Returns the length of the LED chain the device currently drives. The count lives in the device's NVS, not in the bridge configuration, so it stays with the physical lamp.
 - **Parameters:** `0x00` (ignored)
 - **Response:** Status `0x0F` followed by `[Active Count] [Saved Count] [Maximum] [0x00]`. *Active* is the count in use right now (possibly previewed), *Saved* is the persisted value restored at boot, *Maximum* is the firmware buffer limit (`64`). Factory default is `8`.
 
@@ -118,6 +118,29 @@ Resizes the active chain immediately. LEDs beyond the new count are blanked befo
 - **Response:** Standard `0x02` OK.
 - To cancel a preview the host sends `0x10` again with the saved count and `P2 = 0`.
 
+### 0x11: Get LED Type
+Returns the addressable LED chipset the device drives. Like the LED count, the type is stored in the device's NVS.
+- **Parameters:** `0x00` (ignored)
+- **Response:** Status `0x11` followed by `[Active Type] [Saved Type] [Type Count] [Flags]`. *Active* is the type in use right now (possibly previewed), *Saved* is the persisted value restored at boot, *Type Count* is the number of type IDs this firmware knows (valid IDs are `0` to `Type Count - 1`), so a bridge can offer exactly the types the firmware supports. *Flags* bit 0 = the active type needs a device restart to take effect (reserved for future chipsets whose signal timing differs from the booted driver; always `0` for the types below). Factory default is `0`.
+
+| ID | Chipset | Channels | White die |
+| --- | --- | --- | --- |
+| `0` | WS2812B | RGB | - |
+| `1` | SK6812 RGBW | RGBW | cool white (~6000 K) |
+| `2` | SK6812 RGBNW | RGBW | neutral white (~4500 K) |
+| `3` | SK6812 RGBWW | RGBW | warm white (~3000 K) |
+
+IDs are append-only. For RGBW types the firmware moves the common component of each RGB value onto the white die (`W = min(R,G,B)`, RGB reduced by `W`), so protocol colors stay unchanged and white presence states light only the white die. The white color temperature is informational in firmware 0.7.2; the three SK6812 variants produce identical output.
+
+### 0x12: Set LED Type
+Switches the active chipset immediately; the current presence color is re-sent in the new pixel format.
+- **Parameters:**
+  - P1: type ID `0`-`Type Count - 1`. Unknown IDs return `0xFF` ERROR and change nothing.
+  - P2: `0` = preview only (RAM), `1` = apply and persist to NVS.
+  - P3, P4: `0x00` (ignored)
+- **Response:** Standard `0x02` OK.
+- To cancel a preview the host sends `0x12` again with the saved type and `P2 = 0`.
+
 ## Responses (Input Report)
 
 The device may send an Input Report back to the host, formatted as:
@@ -129,9 +152,10 @@ The device may send an Input Report back to the host, formatted as:
 - `0x0A`: **VERSION** - Followed by major, minor, patch, and hardware variant.
 - `0x0B`: **CALIBRATION** - Followed by RGB gains and gamma tenths as described above.
 - `0x0F`: **LED_COUNT** - Followed by active count, saved count, and maximum as described above.
+- `0x11`: **LED_TYPE** - Followed by active type, saved type, type count, and flags as described above.
 - `0xFF`: **ERROR** - Unknown command ID or invalid data.
 
-Older firmware returns `0xFF` for calibration commands; the bridge treats that as calibration unsupported and continues normal presence control. Firmware before 0.7.1 likewise returns `0xFF` for the LED count commands, and the bridge hides the LED count controls.
+Older firmware returns `0xFF` for calibration commands; the bridge treats that as calibration unsupported and continues normal presence control. Firmware before 0.7.1 likewise returns `0xFF` for the LED count commands, and the bridge hides the LED count controls. Firmware before 0.7.2 returns `0xFF` for the LED type commands, and the bridge hides the LED type selector.
 
 ## Error Handling & Edge Cases
 

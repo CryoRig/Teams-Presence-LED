@@ -18,13 +18,14 @@ UsbManager usbManager;
 // --- Firmware Version ---
 #define FW_VERSION_MAJOR 0
 #define FW_VERSION_MINOR 7
-#define FW_VERSION_PATCH 0
+#define FW_VERSION_PATCH 1
 // Hardware variant byte in the VERSION response (protocol.md). 1 = Seeed XIAO ESP32-S3.
 #define HW_VARIANT 1
 
 // --- Configuration ---
 #define LED_PIN          2        // GPIO2 (D1 on XIAO ESP32-S3) — avoids strapping pin GPIO1
-#define NUM_LEDS         8        // Number of WS2812B LEDs in the chain
+#define MAX_LEDS         64       // Buffer size; the active count is configurable and stored in NVS
+#define DEFAULT_LED_COUNT 8
 #define BRIGHTNESS       255      // Max brightness — protocol RGB values control intensity
 #define WATCHDOG_TIMEOUT 60000    // 60 seconds without PING → disconnected state
 #define FRAME_MS         17       // ~16.67 ms → 60 FPS (rounded to nearest ms)
@@ -36,8 +37,12 @@ UsbManager usbManager;
 #define BREATHE_SPEED_MODERATE 0.0349f
 #define BREATHE_SPEED_SLOW     0.0209f
 
-CRGB leds[NUM_LEDS];
-CRGB bootColors[NUM_LEDS];
+CRGB leds[MAX_LEDS];
+CRGB bootColors[MAX_LEDS];
+uint8_t ledCount = DEFAULT_LED_COUNT;
+uint8_t savedLedCount = DEFAULT_LED_COUNT;
+CLEDController* ledController = nullptr;
+Preferences hardwarePreferences;
 
 enum State {
     STATE_OFF,
@@ -150,8 +155,38 @@ CRGB calibratedColor(CRGB color) {
     return color;
 }
 
+uint8_t clampLedCount(uint8_t count) {
+    return constrain(count, (uint8_t)1, (uint8_t)MAX_LEDS);
+}
+
+void loadLedCount() {
+    hardwarePreferences.begin("led-hw", true);
+    savedLedCount = clampLedCount(hardwarePreferences.getUChar("count", DEFAULT_LED_COUNT));
+    hardwarePreferences.end();
+    ledCount = savedLedCount;
+}
+
+void saveLedCount() {
+    savedLedCount = ledCount;
+    hardwarePreferences.begin("led-hw", false);
+    hardwarePreferences.putUChar("count", savedLedCount);
+    hardwarePreferences.end();
+}
+
+// Resize the active chain; pixels beyond the new count are blanked first so they do not keep stale color.
+void applyLedCount(uint8_t count) {
+    count = clampLedCount(count);
+    if (count == ledCount) return;
+    if (count < ledCount) {
+        fill_solid(leds + count, ledCount - count, CRGB::Black);
+        FastLED.show();
+    }
+    ledCount = count;
+    if (ledController) ledController->setLeds(leds, ledCount);
+}
+
 void showBootColors() {
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (int i = 0; i < ledCount; i++) {
         leds[i] = calibratedColor(bootColors[i]);
     }
     FastLED.show();
@@ -163,7 +198,7 @@ void showSolid(CRGB color, bool force = false) {
     if (!force && color == lastLogicalColor) return;
 
     lastLogicalColor = color; // Update the cache
-    fill_solid(leds, NUM_LEDS, calibratedColor(color));
+    fill_solid(leds, ledCount, calibratedColor(color));
     FastLED.show();
 }
 
@@ -194,9 +229,9 @@ CRGB getBreatheColor(float speed, CRGB color) {
 void bootAnimation() {
     const int frames = 90;  // ~1.5 seconds at 60 FPS
     for (int f = 0; f < frames; f++) {
-        for (int i = 0; i < NUM_LEDS; i++) {
+        for (int i = 0; i < ledCount; i++) {
             // Each LED gets a hue offset based on its position + the current frame
-            uint8_t hue = (i * 256 / NUM_LEDS) + (f * 4);
+            uint8_t hue = (i * 256 / ledCount) + (f * 4);
             bootColors[i] = CHSV(hue, 255, 255);
         }
         showBootColors();
@@ -324,6 +359,20 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
             calibrationTestColor = p1 == CAL_TEST_MID_GRAY ? CRGB(128, 128, 128) : CRGB::White;
             showSolid(calibrationTestColor, true);
             break;
+        case CMD_GET_LED_COUNT:
+            markHostAlive();
+            usbManager.sendLedCount(ledCount, savedLedCount, MAX_LEDS);
+            return;
+        case CMD_SET_LED_COUNT:
+            markHostAlive();
+            if (p1 == 0) {
+                response[0] = STATUS_ERROR;
+                break;
+            }
+            applyLedCount(p1);
+            if (p2 == LED_COUNT_PERSIST) saveLedCount();
+            showSolid(lastLogicalColor, true);
+            break;
         default:
             response[0] = STATUS_ERROR;
             break;
@@ -335,7 +384,9 @@ void onUsbCommand(uint8_t cmd, uint8_t p1, uint8_t p2, uint8_t p3, uint8_t p4) {
 void setup() {
     usbManager.begin(onUsbCommand);
 
-    FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+    loadLedCount();
+    ledController = &FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, MAX_LEDS);
+    ledController->setLeds(leds, ledCount);
     FastLED.setMaxPowerInVoltsAndMilliamps(5, 480); // Limit to 5V 480mA for USB safety (note: full white will be dimmed by FastLED to meet this budget)
     FastLED.setBrightness(BRIGHTNESS);
     loadCalibration();

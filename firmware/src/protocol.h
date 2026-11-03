@@ -22,6 +22,8 @@ enum Command : uint8_t {
     CMD_PREVIEW_CALIBRATION = 0x0C,
     CMD_SAVE_CALIBRATION    = 0x0D,
     CMD_CALIBRATION_TEST    = 0x0E,
+    CMD_GET_LED_COUNT       = 0x0F,
+    CMD_SET_LED_COUNT       = 0x10,
 };
 
 // Device -> host status byte (first payload byte of an input report).
@@ -31,6 +33,7 @@ enum Status : uint8_t {
     STATUS_OK          = 0x02,
     STATUS_VERSION     = CMD_VERSION,
     STATUS_CALIBRATION = CMD_GET_CALIBRATION,
+    STATUS_LED_COUNT   = CMD_GET_LED_COUNT,
     STATUS_ERROR       = 0xFF,
 };
 
@@ -40,6 +43,12 @@ enum CalibrationTestPattern : uint8_t {
     CAL_TEST_MID_GRAY = 1,
     // Exit the pattern and reload the saved profile from NVS.
     CAL_TEST_EXIT     = 0xFF,
+};
+
+// CMD_SET_LED_COUNT P2 selectors.
+enum LedCountApply : uint8_t {
+    LED_COUNT_PREVIEW = 0,
+    LED_COUNT_PERSIST = 1,
 };
 
 static const uint16_t MAX_TRANSITION_MS = 10000;

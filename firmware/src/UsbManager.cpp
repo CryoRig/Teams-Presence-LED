@@ -64,6 +64,11 @@ void UsbManager::sendCalibration(uint8_t red, uint8_t green, uint8_t blue, uint8
     vendor.write(response, sizeof(response));
 }
 
+void UsbManager::sendLedCount(uint8_t active, uint8_t saved, uint8_t maximum) {
+    uint8_t response[5] = {0x0F, active, saved, maximum, 0};
+    vendor.write(response, sizeof(response));
+}
+
 void UsbManager::loop() {
     HidCommand cmd;
     // Read from our safe queue and dispatch

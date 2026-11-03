@@ -104,6 +104,20 @@ Shows steady white or mid-gray using the active calibration profile until Save L
 - **Exit (`P1 = 0xFF`):** Leaves the test pattern (if active), discards any previewed profile by reloading the saved profile from NVS, and restores the latest commanded presence state. Firmware older than 0.7.0 treats `0xFF` as white.
 - **Response:** Standard `0x02` OK.
 
+### 0x0F: Get LED Count
+Returns the length of the WS2812B chain the device currently drives. The count lives in the device's NVS, not in the bridge configuration, so it stays with the physical lamp.
+- **Parameters:** `0x00` (ignored)
+- **Response:** Status `0x0F` followed by `[Active Count] [Saved Count] [Maximum] [0x00]`. *Active* is the count in use right now (possibly previewed), *Saved* is the persisted value restored at boot, *Maximum* is the firmware buffer limit (`64`). Factory default is `8`.
+
+### 0x10: Set LED Count
+Resizes the active chain immediately. LEDs beyond the new count are blanked before the chain shrinks.
+- **Parameters:**
+  - P1: LED count `1`-`Maximum`; values above the maximum are clamped. `0` returns `0xFF` ERROR and changes nothing.
+  - P2: `0` = preview only (RAM), `1` = apply and persist to NVS.
+  - P3, P4: `0x00` (ignored)
+- **Response:** Standard `0x02` OK.
+- To cancel a preview the host sends `0x10` again with the saved count and `P2 = 0`.
+
 ## Responses (Input Report)
 
 The device may send an Input Report back to the host, formatted as:
@@ -114,9 +128,10 @@ The device may send an Input Report back to the host, formatted as:
 - `0x02`: **OK** - Command received and processed successfully.
 - `0x0A`: **VERSION** - Followed by major, minor, patch, and hardware variant.
 - `0x0B`: **CALIBRATION** - Followed by RGB gains and gamma tenths as described above.
+- `0x0F`: **LED_COUNT** - Followed by active count, saved count, and maximum as described above.
 - `0xFF`: **ERROR** - Unknown command ID or invalid data.
 
-Older firmware returns `0xFF` for calibration commands; the bridge treats that as calibration unsupported and continues normal presence control.
+Older firmware returns `0xFF` for calibration commands; the bridge treats that as calibration unsupported and continues normal presence control. Firmware before 0.7.1 likewise returns `0xFF` for the LED count commands, and the bridge hides the LED count controls.
 
 ## Error Handling & Edge Cases
 

@@ -43,6 +43,9 @@ public:
     // Send a calibration profile response (5-byte payload).
     void sendCalibration(uint8_t red, uint8_t green, uint8_t blue, uint8_t gamma);
 
+    // Send the active, saved, and maximum LED count (5-byte payload).
+    void sendLedCount(uint8_t active, uint8_t saved, uint8_t maximum);
+
     // Dispatch queued commands to the callback; call from loop()
     void loop();
 

@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "LampParts")(type "KiCad")(uri "${KIPRJMOD}/LampParts.kicad_sym")(options "")(descr "Lamp component symbols sourced from JLCPCB/EasyEDA"))
+)

@@ -1,0 +1,10 @@
+*.kicad_prl
+*.lck
+*.kicad_pcb~
+*.kicad_sch~
+*-backups/
+fp-info-cache
+outputs/
+__pycache__/
+*.py[cod]
+.mcp-backups/

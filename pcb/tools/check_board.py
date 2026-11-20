@@ -9,7 +9,7 @@ import pcbnew
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BOARD = ROOT / "teams-presence-led.kicad_pcb"
+BOARD = ROOT / "TPL01B.kicad_pcb"
 
 
 def repair_module_ground(board):

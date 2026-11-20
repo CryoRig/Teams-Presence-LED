@@ -1,6 +1,6 @@
-# PCB Project
+# TPL01B - Teams Presence Lamp
 
-Open `teams-presence-led.kicad_pro` in KiCad 10, then open the schematic and PCB
+Open `TPL01B.kicad_pro` in KiCad 10, then open the schematic and PCB
 from the project manager's tree. This is a routed prototype design (rev B), not
 an approved manufacturing release. The firmware and hardware release gates below
 must be completed before ordering an assembled production batch.
@@ -106,7 +106,7 @@ waveform during prototype bring-up; do not silently substitute LED revisions.
 ## Firmware And Release Gates
 
 **Do not flash the existing XIAO image and assume the lamp will work.** The
-separate `lamp_s3_mini` PlatformIO target is configured for the 40 mm
+separate `tpl01_rev_b` PlatformIO target is configured for the 40 mm
 ESP32-S3-MINI-1-N8 board (hardware variant 2), with GPIO4 LED-rail gating, a
 provisional 250 mA FastLED LED budget and the WS2812B-V5 timing profile, which
 also satisfies the selected WS2812B-B-V6 (C52941391). Startup does not transmit LED data until USB is

@@ -492,7 +492,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "teams-presence-led.kicad_pro",
+    "filename": "TPL01B.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -690,8 +690,8 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "teams-presence-led.kicad_sch",
-        "name": "teams-presence-led",
+        "filename": "TPL01B.kicad_sch",
+        "name": "TPL01B",
         "uuid": "00000000-0000-0000-0000-000000000000"
       }
     ],

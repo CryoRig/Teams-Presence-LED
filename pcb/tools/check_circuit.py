@@ -9,7 +9,7 @@ import sexpdata
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMATIC = ROOT / "teams-presence-led.kicad_sch"
+SCHEMATIC = ROOT / "TPL01B.kicad_sch"
 CONNECTIONS = {
     "U1": {"1": "GND", "2": "GND", "3": "+3V3", "4": "BOOT",
            "6": "LED_GPIO", "8": "LED_PWR_EN", "23": "USB_DM", "24": "USB_DP",

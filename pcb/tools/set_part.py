@@ -5,7 +5,7 @@ import sexpdata
 import check_circuit as source
 
 
-BOARD = source.ROOT / "teams-presence-led.kicad_pcb"
+BOARD = source.ROOT / "TPL01B.kicad_pcb"
 
 
 def set_part(references, value, mpn, lcsc, datasheet):

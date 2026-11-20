@@ -12,7 +12,7 @@ import check_circuit as source
 
 ROOT = source.ROOT
 SCHEMATIC = source.SCHEMATIC
-BOARD = ROOT / "teams-presence-led.kicad_pcb"
+BOARD = ROOT / "TPL01B.kicad_pcb"
 USB_NETS = {"USB_DP", "USB_DM", "USB_DP_CONN", "USB_DM_CONN"}
 # D1 channel swap: pads 1/6 (x=100.95) carry D-, pads 3/4 (x=99.05) carry D+.
 D1_LABELS = {

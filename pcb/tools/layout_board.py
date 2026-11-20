@@ -5,7 +5,7 @@ import pcbnew
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BOARD = ROOT / "teams-presence-led.kicad_pcb"
+BOARD = ROOT / "TPL01B.kicad_pcb"
 LIBRARIES = Path("C:/Program Files/KiCad/10.0/share/kicad/footprints")
 POSITIONS = {
     "U1": (100, 94.8, 0), "J1": (100, 116, 0),

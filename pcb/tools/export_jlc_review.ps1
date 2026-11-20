@@ -121,7 +121,7 @@ if ($ValidateOnly) {
 $bom | Export-Csv (Join-Path $output 'BOM-JLC.csv') -NoTypeInformation -Encoding utf8NoBOM
 $cpl | Export-Csv (Join-Path $output 'CPL-JLC.csv') -NoTypeInformation -Encoding utf8NoBOM
 $details | Export-Csv (Join-Path $review 'purchasing-overlay.csv') -NoTypeInformation -Encoding utf8NoBOM
-$sources = @('teams-presence-led.kicad_pcb', 'teams-presence-led.kicad_sch', 'teams-presence-led.kicad_pro', 'ORDERING.md') | ForEach-Object {
+$sources = @('TPL01B.kicad_pcb', 'TPL01B.kicad_sch', 'TPL01B.kicad_pro', 'ORDERING.md') | ForEach-Object {
     [ordered]@{ path = "pcb/$_"; sha256 = (Get-FileHash (Join-Path $pcbDirectory $_) -Algorithm SHA256).Hash }
 }
 [ordered]@{
@@ -146,10 +146,10 @@ if ($FinalizePackage) {
               'gto'='-F_Silkscreen.gto';'gbo'='-B_Silkscreen.gbo';'gts'='-F_Mask.gts';
               'gbs'='-B_Mask.gbs';'gm1'='-Edge_Cuts.gm1'}[$_]
         }
-        Join-Path $fabrication ('teams-presence-led' + $suffix)
+        Join-Path $fabrication ('TPL01B' + $suffix)
     })
-    $files += Join-Path $fabrication 'teams-presence-led-PTH.drl'
-    $files += Join-Path $fabrication 'teams-presence-led-NPTH.drl'
+    $files += Join-Path $fabrication 'TPL01B-PTH.drl'
+    $files += Join-Path $fabrication 'TPL01B-NPTH.drl'
     foreach ($file in $files) {
         if (-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -eq 0) {
             throw "Missing/empty fabrication file: $file"
@@ -158,8 +158,8 @@ if ($FinalizePackage) {
     foreach ($file in $files | Where-Object { [IO.Path]::GetExtension($_) -notin @('.drl','.gbrjob') }) {
         if ((Get-Content -LiteralPath $file -Raw) -notmatch '%MOMM\*%') { throw "Not metric Gerber: $file" }
     }
-    $plated = Get-Content (Join-Path $fabrication 'teams-presence-led-PTH.drl') -Raw
-    $nonplated = Get-Content (Join-Path $fabrication 'teams-presence-led-NPTH.drl') -Raw
+    $plated = Get-Content (Join-Path $fabrication 'TPL01B-PTH.drl') -Raw
+    $nonplated = Get-Content (Join-Path $fabrication 'TPL01B-NPTH.drl') -Raw
     if ($plated -notmatch 'METRIC' -or $nonplated -notmatch 'METRIC' -or
         [regex]::Matches($plated, '(?m)^M15\r?$').Count -ne 4 -or
         [regex]::Matches($nonplated, '(?m)^X[\d.-]+Y[\d.-]+\r?$').Count -ne 2) {

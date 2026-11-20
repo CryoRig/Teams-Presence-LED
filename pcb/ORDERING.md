@@ -1,4 +1,4 @@
-# 40 mm JLCPCB Prototype Order Checklist
+# TPL01B - 40 mm JLCPCB Prototype Order Checklist
 
 ## Confirmed Requirements
 
@@ -46,7 +46,7 @@ FastLED's 480 mA setting is an estimate for LED consumption, not a measured
 limit on total USB input current. It does not include the ESP32, conversion
 losses, buffers or startup current, and is not an overcurrent protection circuit.
 
-The `lamp_s3_mini` prototype firmware allocates 250 mA to LEDs, approved by the
+The `tpl01_rev_b` prototype firmware allocates 250 mA to LEDs, approved by the
 user on 2026-11-11 for initial prototypes,
 leaving 250 mA of the configured 500 mA USB budget for electronics, estimation
 error and transient headroom. This allocation must be checked on the actual
@@ -70,7 +70,7 @@ The XIAO target keeps generic timing for its current SK6812 bench hardware.
 This datasheet-based code configuration is not a measured waveform or hardware
 operation test.
 
-- `lamp_s3_mini`: 40 mm ESP32-S3-MINI-1-N8 board, hardware variant 2, 8 MB flash.
+- `tpl01_rev_b`: TPL01B 40 mm ESP32-S3-MINI-1-N8 board, hardware variant 2, 8 MB flash.
 - GPIO4 keeps the LED rail off before USB configuration and when suspended or
   disconnected. The custom configuration requests 500 mA, bus-powered.
 - The custom 40 mm target and original XIAO target compile successfully.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BOARD = ROOT / "teams-presence-led.kicad_pcb"
+BOARD = ROOT / "TPL01B.kicad_pcb"
 EASYEDA_UNIT_MM = 0.254
 MAX_PAD_ERROR_MM = 0.6
 

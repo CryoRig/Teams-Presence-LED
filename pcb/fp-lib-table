@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "LampParts")(type "KiCad")(uri "${KIPRJMOD}/LampParts.pretty")(options "")(descr "Lamp component footprints sourced from JLCPCB/EasyEDA"))
+)
